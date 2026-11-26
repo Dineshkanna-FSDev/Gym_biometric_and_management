@@ -1,21 +1,40 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute';
+import AdminLayout from './components/layout/AdminLayout';
+import Landing from './pages/public/Landing';
+import Login from './pages/public/Login';
+import Dashboard from './pages/admin/Dashboard';
+import Members from './pages/admin/Members';
+import Attendance from './pages/admin/Attendance';
+import Payments from './pages/admin/Payments';
+import Analytics from './pages/admin/Analytics';
 
-function App() {
-  const [count, setCount] = useState(0)
-
+export default function App() {
   return (
-    <>
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-      <h1 className="text-3xl font-bold text-amber-400 border border-amber-400/40 px-6 py-4 rounded-xl">
-        Tailwind CSS is Working!
-      </h1>
-    </div>
-    </>
-  )
-}
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Public Marketing & Auth Routes */}
+          <Route path="/" element={<Landing />} />
+          <Route path="/login" element={<Login />} />
 
-export default App
+          {/* Protected Admin Routes */}
+          <Route element={<ProtectedRoute />}>
+            <Route path="/admin" element={<AdminLayout />}>
+              <Route index element={<Navigate to="/admin/dashboard" replace />} />
+              <Route path="dashboard" element={<Dashboard />} />
+              <Route path="members" element={<Members />} />
+              <Route path="attendance" element={<Attendance />} />
+              <Route path="payments" element={<Payments />} />
+              <Route path="analytics" element={<Analytics />} />
+            </Route>
+          </Route>
+
+          {/* Fallback */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
+  );
+}

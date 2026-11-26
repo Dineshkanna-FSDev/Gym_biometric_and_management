@@ -39,7 +39,7 @@ export default {
         return new Response(responseBody, { status: 200, headers: TEXT_HEADERS });
       }
 
-      // 2. INCOMING ATTENDANCE & FACE ENROLLMENT LOGS (POST /iclock/cdata)
+      // 2. INCOMING ATTENDANCE & USER/FACE SYNC (POST /iclock/cdata)
       if (method === "POST" && path.endsWith("/iclock/cdata")) {
         const table = (url.searchParams.get("table") || "").toUpperCase();
         const rawBody = await req.text();
@@ -48,6 +48,7 @@ export default {
           .map((line) => line.trim())
           .filter(Boolean);
 
+        // A. Attendance Logs (Member Face Scan)
         if (table === "ATTLOG") {
           const punches = lines
             .map((line) => {
@@ -76,32 +77,71 @@ export default {
           });
         }
 
+        // B. New User & Face Enrollment Sync from Device (OPERLOG / BIODATA / USERPIC)
         if (table === "OPERLOG" || table === "BIODATA" || table === "USERPIC") {
-          const enrolledPins = new Set<number>();
+          const usersFromDevice = new Map<number, { name?: string; faceEnrolled: boolean }>();
 
           for (const line of lines) {
             const pinMatch = line.match(/(?:^|\s|\t)PIN=(\d+)/i);
-            if (pinMatch) {
-              if (
-                table === "BIODATA" ||
-                table === "USERPIC" ||
-                line.startsWith("BIODATA") ||
-                line.startsWith("USERPIC") ||
-                line.startsWith("OPLOG")
-              ) {
-                enrolledPins.add(parseInt(pinMatch[1], 10));
+            if (!pinMatch) continue;
+
+            const pin = parseInt(pinMatch[1], 10);
+            const existing = usersFromDevice.get(pin) || { faceEnrolled: false };
+
+            // Extract Name from "USER PIN=1002\tName=Dinesh..."
+            const nameMatch = line.match(/(?:^|\t)Name=([^\t\r\n]+)/i);
+            if (nameMatch && nameMatch[1].trim()) {
+              existing.name = nameMatch[1].trim();
+            }
+
+            // Mark face enrolled if biometric template or photo is sent
+            if (
+              table === "BIODATA" ||
+              table === "USERPIC" ||
+              line.startsWith("BIODATA") ||
+              line.startsWith("USERPIC")
+            ) {
+              existing.faceEnrolled = true;
+            }
+
+            usersFromDevice.set(pin, existing);
+          }
+
+          for (const [pin, info] of usersFromDevice.entries()) {
+            // Check if member already exists in DB
+            const { data: member } = await supabase
+              .from("members")
+              .select("id, full_name, face_enrolled")
+              .eq("device_pin", pin)
+              .maybeSingle();
+
+            if (!member) {
+              // Insert new member created directly on the biometric device
+              const { error: insertError } = await supabase.from("members").insert({
+                device_pin: pin,
+                full_name: info.name || `Member ${pin}`,
+                phone: `PENDING-${pin}`,
+                face_enrolled: info.faceEnrolled,
+                status: "active",
+              });
+              if (insertError) console.error("Auto-insert member error:", insertError);
+            } else {
+              // Update name or face_enrolled status if changed
+              const updates: Record<string, unknown> = {};
+              if (info.name && member.full_name.startsWith("Member ")) {
+                updates.full_name = info.name;
+              }
+              if (info.faceEnrolled && !member.face_enrolled) {
+                updates.face_enrolled = true;
+                updates.status = "active";
+              }
+              if (Object.keys(updates).length > 0) {
+                await supabase.from("members").update(updates).eq("id", member.id);
               }
             }
           }
 
-          for (const pin of enrolledPins) {
-            const { error } = await supabase.rpc("confirm_face_enrolled", {
-              p_device_pin: pin,
-            });
-            if (error) console.error("Confirm face RPC error:", error);
-          }
-
-          return new Response(`OK: ${enrolledPins.size}`, {
+          return new Response(`OK: ${usersFromDevice.size}`, {
             status: 200,
             headers: TEXT_HEADERS,
           });
