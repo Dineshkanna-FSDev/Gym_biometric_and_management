@@ -30,7 +30,7 @@ export default {
           "Delay=60",
           "TransTimes=00:00;14:05",
           "TransInterval=1",
-          "TransFlag=1111000000",
+          "TransFlag=1111111111",
           "TimeZone=330",
           "Realtime=1",
           "Encrypt=None",
@@ -94,12 +94,11 @@ export default {
               existing.name = nameMatch[1].trim();
             }
 
-            // Mark face enrolled if biometric template or photo is sent
+            // Mark face enrolled if biometric template, face record, or photo is sent
             if (
               table === "BIODATA" ||
               table === "USERPIC" ||
-              line.startsWith("BIODATA") ||
-              line.startsWith("USERPIC")
+              /^(BIODATA|USERPIC|FACE)\b/i.test(line)
             ) {
               existing.faceEnrolled = true;
             }
@@ -126,14 +125,13 @@ export default {
               });
               if (insertError) console.error("Auto-insert member error:", insertError);
             } else {
-              // Update name or face_enrolled status if changed
+              // Update name or face_enrolled status if changed (without overriding manual status)
               const updates: Record<string, unknown> = {};
               if (info.name && member.full_name.startsWith("Member ")) {
                 updates.full_name = info.name;
               }
               if (info.faceEnrolled && !member.face_enrolled) {
                 updates.face_enrolled = true;
-                updates.status = "active";
               }
               if (Object.keys(updates).length > 0) {
                 await supabase.from("members").update(updates).eq("id", member.id);
