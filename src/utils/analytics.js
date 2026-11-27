@@ -17,6 +17,7 @@ const IST_FORMATTER = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
   weekday: 'short',
   hour: '2-digit',
+  minute: '2-digit',
   hourCycle: 'h23',
 });
 
@@ -57,6 +58,7 @@ export function toISTParts(timestamp) {
     dateISO: `${map.year}-${map.month}-${map.day}`,
     weekday: map.weekday,
     hour: Number(map.hour),
+    minute: Number(map.minute || 0),
   };
 }
 
@@ -344,3 +346,249 @@ export function downloadAnalyticsCsv({
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
+
+/**
+ * Formats average daily hours cleanly ("1.2 hrs", "45 mins", or "—").
+ */
+export function formatAvgHoursPerDay(avgHours) {
+  if (avgHours === null || avgHours === undefined || Number.isNaN(avgHours)) {
+    return '—';
+  }
+  const totalMinutes = avgHours * 60;
+  if (totalMinutes < 60) {
+    return `${Math.round(totalMinutes)} mins`;
+  }
+  return `${avgHours.toFixed(1)} hrs`;
+}
+
+/**
+ * Computes (SUM(duration_minutes) / COUNT(DISTINCT attendance_date)) / 60
+ * strictly from completed sessions (excludes auto_closed / null durations).
+ */
+export function computeAvgHoursPerDay(logs) {
+  let totalMinutes = 0;
+  const activeDates = new Set();
+
+  for (const log of logs || []) {
+    if (String(log.status || '').toLowerCase() !== 'completed') continue;
+    if (log.duration_minutes === null || log.duration_minutes === undefined) continue;
+    const mins = Number(log.duration_minutes);
+    if (Number.isNaN(mins) || mins < 0) continue;
+
+    const dateKey =
+      (log.attendance_date ? String(log.attendance_date).slice(0, 10) : null) ||
+      toISTParts(log.check_in_at)?.dateISO;
+    if (!dateKey) continue;
+
+    totalMinutes += mins;
+    activeDates.add(dateKey);
+  }
+
+  if (activeDates.size === 0) return null;
+  return totalMinutes / activeDates.size / 60;
+}
+
+/**
+ * Computes a map of member_id -> formatted avg hours/day string from completed logs.
+ */
+export function buildMemberAvgHoursMap(logs) {
+  const byMember = new Map();
+  for (const log of logs || []) {
+    const key = String(log.member_id);
+    if (!byMember.has(key)) byMember.set(key, []);
+    byMember.get(key).push(log);
+  }
+
+  const result = new Map();
+  for (const [memberId, memberLogs] of byMember.entries()) {
+    result.set(memberId, computeAvgHoursPerDay(memberLogs));
+  }
+  return result;
+}
+
+function getMondayStartISO(dateISO) {
+  const [y, m, d] = dateISO.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const day = dt.getUTCDay(); // 0=Sun..6=Sat
+  const diffToMon = day === 0 ? -6 : 1 - day;
+  dt.setUTCDate(dt.getUTCDate() + diffToMon);
+  return dt.toISOString().slice(0, 10);
+}
+
+function formatMinutesAsTime(totalMinutes) {
+  const minsNormalized = ((Math.round(totalMinutes) % 1440) + 1440) % 1440;
+  const h24 = Math.floor(minsNormalized / 60);
+  const m = minsNormalized % 60;
+  const period = h24 >= 12 ? 'PM' : 'AM';
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${period}`;
+}
+
+function getWorkoutSlotLabel(hour) {
+  if (hour >= 5 && hour < 11) return 'Morning 5–11 AM';
+  if (hour >= 11 && hour < 16) return 'Afternoon 11 AM–4 PM';
+  if (hour >= 16 && hour < 20) return 'Evening 4–8 PM';
+  if (hour >= 20 && hour < 23) return 'Night 8–11 PM';
+  return 'Late / Early Hours';
+}
+
+/**
+ * Computes per-member workout KPIs, 30-day duration series, and weekday habit distribution.
+ */
+export function computeMemberWorkoutAnalytics(logs, joiningDate) {
+  const todayISO = getTodayISO();
+  const thirtyDaysStart = addDaysToISO(todayISO, -29);
+
+  const avgHoursPerDay = computeAvgHoursPerDay(logs);
+  const completedCount = (logs || []).filter(
+    (l) =>
+      String(l.status || '').toLowerCase() === 'completed' &&
+      l.duration_minutes !== null &&
+      l.duration_minutes !== undefined
+  ).length;
+
+  const allVisitDates = new Set();
+  const monthVisitDates = new Set();
+  const weekVisitSet = new Set();
+  const weekdayCounts = Object.fromEntries(WEEKDAYS.map((d) => [d, 0]));
+  const slotCounts = new Map();
+  let checkInMinuteSum = 0;
+  let checkInTimeCount = 0;
+
+  // Map dateISO -> { completedMinutes, totalSessions, hasCheckInWithoutDuration }
+  const dailyMap = new Map();
+
+  for (const log of logs || []) {
+    const ist = toISTParts(log.check_in_at);
+    const dateKey =
+      (log.attendance_date ? String(log.attendance_date).slice(0, 10) : null) ||
+      ist?.dateISO;
+    if (!dateKey) continue;
+
+    allVisitDates.add(dateKey);
+    if (dateKey >= thirtyDaysStart && dateKey <= todayISO) {
+      monthVisitDates.add(dateKey);
+    }
+    weekVisitSet.add(getMondayStartISO(dateKey));
+
+    // Weekday habit count
+    const weekday =
+      ist?.weekday ||
+      new Date(`${dateKey}T12:00:00Z`).toLocaleDateString('en-US', {
+        weekday: 'short',
+        timeZone: 'UTC',
+      });
+    if (weekdayCounts[weekday] !== undefined) {
+      weekdayCounts[weekday] += 1;
+    }
+
+    // Usual slot + avg check-in time in IST
+    if (ist) {
+      const slot = getWorkoutSlotLabel(ist.hour);
+      slotCounts.set(slot, (slotCounts.get(slot) || 0) + 1);
+      checkInMinuteSum += ist.hour * 60 + ist.minute;
+      checkInTimeCount += 1;
+    }
+
+    // Daily 30-day duration aggregation (completed durations only; track open/auto_closed presence)
+    if (!dailyMap.has(dateKey)) {
+      dailyMap.set(dateKey, { minutes: 0, sessions: 0, hasUnclosedOnly: false });
+    }
+    const dayBucket = dailyMap.get(dateKey);
+    dayBucket.sessions += 1;
+    if (
+      String(log.status || '').toLowerCase() === 'completed' &&
+      log.duration_minutes !== null &&
+      log.duration_minutes !== undefined
+    ) {
+      dayBucket.minutes += Math.max(0, Number(log.duration_minutes || 0));
+    } else if (dayBucket.minutes === 0) {
+      dayBucket.hasUnclosedOnly = true;
+    }
+  }
+
+  // Weekly consistency since joining_date (or earliest visit date)
+  const earliestVisit =
+    allVisitDates.size > 0 ? Array.from(allVisitDates).sort()[0] : todayISO;
+  const anchorISO = joiningDate ? String(joiningDate).slice(0, 10) : earliestVisit;
+  const validAnchor = anchorISO <= todayISO ? anchorISO : earliestVisit;
+  const elapsedDays = Math.max(
+    1,
+    Math.floor(
+      (Date.parse(`${todayISO}T00:00:00Z`) - Date.parse(`${validAnchor}T00:00:00Z`)) /
+        86400000
+    ) + 1
+  );
+  const weeksElapsed = Math.max(1, elapsedDays / 7);
+  const avgDaysPerWeek = Number((allVisitDates.size / weeksElapsed).toFixed(1));
+
+  // Current active week streak (checks current week, or previous week if week just started)
+  const currentWeekStart = getMondayStartISO(todayISO);
+  const prevWeekStart = addDaysToISO(currentWeekStart, -7);
+  let weekCursor = weekVisitSet.has(currentWeekStart)
+    ? currentWeekStart
+    : weekVisitSet.has(prevWeekStart)
+      ? prevWeekStart
+      : null;
+  let activeWeekStreak = 0;
+  while (weekCursor && weekVisitSet.has(weekCursor)) {
+    activeWeekStreak += 1;
+    weekCursor = addDaysToISO(weekCursor, -7);
+  }
+
+  // Most frequent slot + avg check-in time
+  let usualSlot = '—';
+  let topSlotCount = 0;
+  for (const [slot, count] of slotCounts.entries()) {
+    if (count > topSlotCount) {
+      topSlotCount = count;
+      usualSlot = slot;
+    }
+  }
+  const avgCheckInTime =
+    checkInTimeCount > 0 ? formatMinutesAsTime(checkInMinuteSum / checkInTimeCount) : '—';
+
+  // 30-day series
+  const thirtyDaySeries = [];
+  let cursor = thirtyDaysStart;
+  for (let i = 0; i < 30; i += 1) {
+    const dt = new Date(`${cursor}T12:00:00Z`);
+    const shortLabel = dt.toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      timeZone: 'UTC',
+    });
+    const weekday = dt.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+    const entry = dailyMap.get(cursor) || { minutes: 0, sessions: 0, hasUnclosedOnly: false };
+
+    thirtyDaySeries.push({
+      dateISO: cursor,
+      shortLabel,
+      weekday,
+      minutes: entry.minutes,
+      sessions: entry.sessions,
+      visitedWithoutDuration: entry.sessions > 0 && entry.minutes === 0 && entry.hasUnclosedOnly,
+    });
+    cursor = addDaysToISO(cursor, 1);
+  }
+
+  const weekdayHabit = WEEKDAYS.map((day) => ({
+    day,
+    count: weekdayCounts[day] || 0,
+  }));
+
+  return {
+    avgHoursPerDay,
+    avgHoursLabel: formatAvgHoursPerDay(avgHoursPerDay),
+    completedCount,
+    visitsLast30Days: monthVisitDates.size,
+    totalVisitsAllTime: allVisitDates.size,
+    avgDaysPerWeek,
+    activeWeekStreak,
+    usualSlot,
+    avgCheckInTime,
+    thirtyDaySeries,
+    weekdayHabit,
+  };
+}
+

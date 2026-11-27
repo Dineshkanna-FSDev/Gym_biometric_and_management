@@ -29,6 +29,7 @@ import {
 import StatusBadge from '../../components/ui/StatusBadge';
 import Modal from '../../components/ui/Modal';
 import RenewBillingModal from '../../components/billing/RenewBillingModal';
+import MemberWorkoutAnalytics from '../../components/analytics/MemberWorkoutAnalytics';
 import {
   displayValue,
   formatCurrency,
@@ -128,7 +129,7 @@ export default function MemberProfile() {
         .select('*')
         .eq('member_id', id)
         .order('check_in_at', { ascending: false })
-        .limit(100),
+        .limit(500),
       supabase.from('member_subscriptions').select('*').eq('member_id', id).limit(50),
       supabase.from('payments').select('*').eq('member_id', id).limit(100),
       ensureAndFetchSubscriptionPlans(false).catch(() => []),
@@ -646,6 +647,9 @@ export default function MemberProfile() {
           />
         </div>
       </section>
+
+      {/* Member Workout Analytics */}
+      <MemberWorkoutAnalytics logs={attendanceLogs} joiningDate={member.joining_date} />
 
       {/* History Tabs */}
       <section className="rounded-2xl border border-slate-200 bg-white shadow-xs">

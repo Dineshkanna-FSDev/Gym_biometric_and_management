@@ -23,11 +23,14 @@ import StatusBadge from '../../components/ui/StatusBadge';
 import MemberLink from '../../components/ui/MemberLink';
 import {
   displayValue,
-  formatCurrency,
   formatDateDDMMYYYY,
   formatTime,
   getValidityToneClass,
 } from '../../utils/formatters';
+import {
+  buildMemberAvgHoursMap,
+  formatAvgHoursPerDay,
+} from '../../utils/analytics';
 
 function getTodayISO() {
   const now = new Date();
@@ -112,6 +115,7 @@ export default function Dashboard() {
 
   const [members, setMembers] = useState([]);
   const [todayLogs, setTodayLogs] = useState([]);
+  const [completedLogs, setCompletedLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notificationState, setNotificationState] = useState('idle');
@@ -124,6 +128,12 @@ export default function Dashboard() {
       return {
         members: DEMO_MEMBERS_OVERVIEW,
         todayLogs: DEMO_ATTENDANCE_LOGS.filter((l) => l.attendance_date === todayISO),
+        completedLogs: DEMO_ATTENDANCE_LOGS.filter(
+          (l) =>
+            String(l.status || '').toLowerCase() === 'completed' &&
+            l.duration_minutes !== null &&
+            l.duration_minutes !== undefined
+        ),
       };
     }
 
@@ -139,9 +149,30 @@ export default function Dashboard() {
     if (membersRes.error) throw membersRes.error;
     if (attendanceRes.error) throw attendanceRes.error;
 
+    const todayRows = attendanceRes.data || [];
+    const todayMemberIds = Array.from(
+      new Set(todayRows.map((l) => l.member_id).filter(Boolean))
+    );
+
+    let completedRows = [];
+    if (todayMemberIds.length > 0) {
+      const completedRes = await supabase
+        .from('attendance_logs')
+        .select('member_id, attendance_date, check_in_at, duration_minutes, status')
+        .in('member_id', todayMemberIds)
+        .eq('status', 'completed')
+        .not('duration_minutes', 'is', null)
+        .limit(5000);
+
+      if (!completedRes.error && completedRes.data) {
+        completedRows = completedRes.data;
+      }
+    }
+
     return {
       members: membersRes.data || [],
-      todayLogs: attendanceRes.data || [],
+      todayLogs: todayRows,
+      completedLogs: completedRows,
     };
   }, [isDemoMode, todayISO]);
 
@@ -152,6 +183,7 @@ export default function Dashboard() {
       const result = await fetchDashboardData();
       setMembers(result.members);
       setTodayLogs(result.todayLogs);
+      setCompletedLogs(result.completedLogs);
     } catch (err) {
       setError(err.message || 'Failed to load dashboard data.');
     } finally {
@@ -166,6 +198,7 @@ export default function Dashboard() {
         if (cancelled) return;
         setMembers(result.members);
         setTodayLogs(result.todayLogs);
+        setCompletedLogs(result.completedLogs);
         setError('');
       })
       .catch((err) => {
@@ -179,8 +212,9 @@ export default function Dashboard() {
     };
   }, [fetchDashboardData]);
 
-  // Lookup map from member id to member_overview row
+  // Lookup map from member id to member_overview row and avg hours/day
   const memberById = new Map(members.map((m) => [String(m.id), m]));
+  const avgHoursByMember = buildMemberAvgHoursMap(completedLogs);
 
   // Top KPI calculations
   const totalMembers = members.length;
@@ -258,7 +292,7 @@ export default function Dashboard() {
         checkIn: formatTime(log.check_in_at),
         checkOut: formatTime(log.check_out_at),
         validityDays: m?.validity_days ?? null,
-        pendingAmount: Number(m?.pending_amount || 0),
+        avgHoursLabel: formatAvgHoursPerDay(avgHoursByMember.get(String(log.member_id))),
       };
     })
     .filter((row) => {
@@ -386,7 +420,7 @@ export default function Dashboard() {
                     Today Attendance ({todayFormatted})
                   </h2>
                   <p className="text-xs text-slate-500">
-                    Real-time check-ins with subscription validity &amp; dues
+                    Real-time check-ins with subscription validity &amp; daily avg hours
                   </p>
                 </div>
                 <StatusBadge variant="info">{attendanceRows.length} logs</StatusBadge>
@@ -400,7 +434,7 @@ export default function Dashboard() {
                       <th className="px-4 py-3">Check In</th>
                       <th className="px-4 py-3">Check Out</th>
                       <th className="px-4 py-3">Validity Days</th>
-                      <th className="px-5 py-3 text-right">Pending Amount</th>
+                      <th className="px-5 py-3 text-right">AVG HRS / DAY</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
@@ -440,13 +474,11 @@ export default function Dashboard() {
                                 : `${row.validityDays} days`}
                             </span>
                           </td>
-                          <td className="px-5 py-3.5 whitespace-nowrap text-right font-semibold">
-                            {row.pendingAmount > 0 ? (
-                              <span className="text-rose-600">
-                                {formatCurrency(row.pendingAmount)}
-                              </span>
+                          <td className="px-5 py-3.5 whitespace-nowrap text-right font-semibold text-slate-700">
+                            {row.avgHoursLabel === '—' ? (
+                              <span className="text-slate-400">—</span>
                             ) : (
-                              <span className="text-slate-400">₹0</span>
+                              <span>{row.avgHoursLabel}</span>
                             )}
                           </td>
                         </tr>
