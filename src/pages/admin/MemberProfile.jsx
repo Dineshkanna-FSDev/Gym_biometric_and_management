@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
@@ -68,6 +68,8 @@ function sortByNewest(rows, keys) {
 export default function MemberProfile() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const outletContext = useOutletContext() || {};
+  const punchRefreshSignal = outletContext.punchRefreshSignal || 0;
 
   const [member, setMember] = useState(null);
   const [plansById, setPlansById] = useState({});
@@ -165,6 +167,25 @@ export default function MemberProfile() {
       cancelled = true;
     };
   }, [fetchProfileData]);
+
+  // Soft-refresh attendance & streak data when a live punch hits for this already-open profile
+  useEffect(() => {
+    if (!punchRefreshSignal) return undefined;
+    let cancelled = false;
+    fetchProfileData()
+      .then((result) => {
+        if (cancelled) return;
+        setMember(result.member);
+        setPlansById(result.plansById);
+        setAttendanceLogs(result.attendanceLogs);
+        setSubscriptions(result.subscriptions);
+        setPayments(result.payments);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [punchRefreshSignal, fetchProfileData]);
 
   function openEditModal() {
     if (!member) return;
