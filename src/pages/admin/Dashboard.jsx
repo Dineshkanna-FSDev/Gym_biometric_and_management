@@ -1,153 +1,61 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import {
+  AlertCircle,
   AlertTriangle,
   Cake,
   CalendarClock,
   CheckCircle2,
+  Loader2,
   MessageSquare,
   Play,
+  RefreshCw,
   UserCheck,
   UserMinus,
   UserX,
   Users,
 } from 'lucide-react';
+import { isSupabaseConfigured, supabase } from '../../lib/supabase';
+import { useAuth } from '../../hooks/useAuth';
+import { DEMO_ATTENDANCE_LOGS, DEMO_MEMBERS_OVERVIEW } from '../../data/demoData';
 import StatCard from '../../components/ui/StatCard';
 import StatusBadge from '../../components/ui/StatusBadge';
+import MemberLink from '../../components/ui/MemberLink';
+import {
+  displayValue,
+  formatCurrency,
+  formatDateDDMMYYYY,
+  formatTime,
+  getValidityToneClass,
+} from '../../utils/formatters';
 
-function formatTodayDDMMYYYY() {
+function getTodayISO() {
   const now = new Date();
-  const dd = String(now.getDate()).padStart(2, '0');
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
   const yyyy = now.getFullYear();
-  return `${dd}-${mm}-${yyyy}`;
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
-const KPI_CARDS = [
-  {
-    label: 'Total Members',
-    value: 248,
-    subtext: '+14 this month',
-    icon: Users,
-    accentClass: 'bg-indigo-50 text-indigo-600',
-  },
-  {
-    label: 'Male',
-    value: 164,
-    subtext: '66% of active base',
-    icon: Users,
-    accentClass: 'bg-sky-50 text-sky-600',
-  },
-  {
-    label: 'Female',
-    value: 84,
-    subtext: '34% of active base',
-    icon: Users,
-    accentClass: 'bg-pink-50 text-pink-600',
-  },
-  {
-    label: 'Today Present',
-    value: 112,
-    subtext: 'Synced via ZKFace V4.0',
-    icon: UserCheck,
-    accentClass: 'bg-emerald-50 text-emerald-600',
-    valueClass: 'text-emerald-700',
-  },
-  {
-    label: 'Today Absent',
-    value: 136,
-    subtext: 'Not punched in yet',
-    icon: UserMinus,
-    accentClass: 'bg-amber-50 text-amber-600',
-  },
-  {
-    label: 'Expired Members',
-    value: 19,
-    subtext: 'Needs renewal follow-up',
-    icon: UserX,
-    accentClass: 'bg-rose-50 text-rose-600',
-    valueClass: 'text-rose-600',
-  },
-];
+function daysUntilBirthday(dobString) {
+  if (!dobString) return null;
+  const dob = new Date(dobString);
+  if (Number.isNaN(dob.getTime())) return null;
 
-const TODAY_ATTENDANCE = [
-  {
-    code: 'SN342',
-    name: 'Karthik Rajan',
-    checkIn: '06:14 AM',
-    checkOut: '07:32 AM',
-    validityDays: 42,
-    pendingAmount: 0,
-  },
-  {
-    code: 'SN289',
-    name: 'Priya Nair',
-    checkIn: '06:45 AM',
-    checkOut: '08:05 AM',
-    validityDays: 4,
-    pendingAmount: 500,
-  },
-  {
-    code: 'SN194',
-    name: 'Vikram Deshmukh',
-    checkIn: '07:10 AM',
-    checkOut: '—',
-    validityDays: -3,
-    pendingAmount: 2499,
-  },
-  {
-    code: 'SN415',
-    name: 'Sneha Kulkarni',
-    checkIn: '07:28 AM',
-    checkOut: '08:40 AM',
-    validityDays: 88,
-    pendingAmount: 0,
-  },
-  {
-    code: 'SN118',
-    name: 'Arjun Sharma',
-    checkIn: '08:02 AM',
-    checkOut: '—',
-    validityDays: -7,
-    pendingAmount: 1500,
-  },
-  {
-    code: 'SN367',
-    name: 'Divya Menon',
-    checkIn: '08:19 AM',
-    checkOut: '09:15 AM',
-    validityDays: 19,
-    pendingAmount: 0,
-  },
-];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-const EXPIRE_RENEWAL_LIST = [
-  { name: 'Rohan Verma', code: 'SN210', date: '27-11-2026', badge: 'In 2 days', variant: 'warning' },
-  { name: 'Priya Nair', code: 'SN289', date: '29-11-2026', badge: 'In 4 days', variant: 'warning' },
-  { name: 'Siddharth Rao', code: 'SN304', date: '01-12-2026', badge: 'In 6 days', variant: 'info' },
-  { name: 'Meera Krishnan', code: 'SN331', date: '03-12-2026', badge: 'In 8 days', variant: 'info' },
-  { name: 'Nikhil Bansal', code: 'SN275', date: '05-12-2026', badge: 'In 10 days', variant: 'neutral' },
-];
-
-const EXPIRED_MEMBERSHIP_LIST = [
-  { name: 'Vikram Deshmukh', code: 'SN194', date: '22-11-2026', badge: '3 days ago', variant: 'danger' },
-  { name: 'Ananya Gupta', code: 'SN162', date: '20-11-2026', badge: '5 days ago', variant: 'danger' },
-  { name: 'Arjun Sharma', code: 'SN118', date: '18-11-2026', badge: '7 days ago', variant: 'danger' },
-  { name: 'Farhan Ali', code: 'SN144', date: '14-11-2026', badge: '11 days ago', variant: 'danger' },
-  { name: 'Kaveri Iyer', code: 'SN098', date: '09-11-2026', badge: '16 days ago', variant: 'danger' },
-];
-
-const UPCOMING_BIRTHDAYS = [
-  { name: 'Sneha Kulkarni', date: '26-11-1997', badge: 'In 1 day', variant: 'info' },
-  { name: 'Karthik Rajan', date: '28-11-1995', badge: 'In 3 days', variant: 'info' },
-  { name: 'Divya Menon', date: '30-11-1999', badge: 'In 5 days', variant: 'neutral' },
-  { name: 'Rahul Subramanian', date: '02-12-1993', badge: 'In 7 days', variant: 'neutral' },
-];
+  const next = new Date(today.getFullYear(), dob.getMonth(), dob.getDate());
+  if (next < today) {
+    next.setFullYear(today.getFullYear() + 1);
+  }
+  return Math.round((next - today) / (1000 * 60 * 60 * 24));
+}
 
 /**
  * Reusable scrollable alert list card for renewal, expired, and birthday widgets.
  */
-function MemberAlertListCard({ title, icon: Icon, iconClass, items, emptyText, showCode = true }) {
+function MemberAlertListCard({ title, icon: Icon, iconClass, items, emptyText, showPin = true }) {
   return (
     <section className="flex flex-col rounded-xl border border-slate-200 bg-white shadow-xs">
       <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
@@ -168,15 +76,15 @@ function MemberAlertListCard({ title, icon: Icon, iconClass, items, emptyText, s
         ) : (
           items.map((item) => (
             <div
-              key={`${item.name}-${item.code ?? item.date}`}
+              key={`${item.id}-${item.date}`}
               className="flex items-center justify-between gap-3 py-3.5"
             >
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-800">
-                  {item.name}
-                  {showCode && item.code && (
+                <p className="truncate text-sm">
+                  <MemberLink memberId={item.id} name={item.name} />
+                  {showPin && item.pin !== null && item.pin !== undefined && (
                     <span className="ml-1.5 font-mono text-xs font-medium text-slate-400">
-                      | {item.code}
+                      | PIN {item.pin}
                     </span>
                   )}
                 </p>
@@ -194,29 +102,232 @@ function MemberAlertListCard({ title, icon: Icon, iconClass, items, emptyText, s
 }
 
 /**
- * Admin Dashboard overview with 6 KPI cards, live attendance preview table,
+ * Admin Dashboard overview with 6 KPI cards, live attendance feed,
  * renewal/expiry/birthday panels, and WhatsApp notification trigger.
  */
 export default function Dashboard() {
+  const { isDemoMode } = useAuth();
   const outletContext = useOutletContext() || {};
   const globalSearch = (outletContext.globalSearch || '').trim().toLowerCase();
 
-  const [notificationState, setNotificationState] = useState('idle'); // 'idle' | 'sent'
+  const [members, setMembers] = useState([]);
+  const [todayLogs, setTodayLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [notificationState, setNotificationState] = useState('idle');
 
-  const todayFormatted = formatTodayDDMMYYYY();
+  const todayISO = getTodayISO();
+  const todayFormatted = formatDateDDMMYYYY(todayISO);
 
-  const filteredAttendance = TODAY_ATTENDANCE.filter((row) => {
-    if (!globalSearch) return true;
-    return (
-      row.name.toLowerCase().includes(globalSearch) ||
-      row.code.toLowerCase().includes(globalSearch)
-    );
-  });
+  const fetchDashboardData = useCallback(async () => {
+    if (isDemoMode || !isSupabaseConfigured || !supabase) {
+      return {
+        members: DEMO_MEMBERS_OVERVIEW,
+        todayLogs: DEMO_ATTENDANCE_LOGS.filter((l) => l.attendance_date === todayISO),
+      };
+    }
+
+    const [membersRes, attendanceRes] = await Promise.all([
+      supabase.from('member_overview').select('*').order('full_name', { ascending: true }),
+      supabase
+        .from('attendance_logs')
+        .select('*')
+        .eq('attendance_date', todayISO)
+        .order('check_in_at', { ascending: false }),
+    ]);
+
+    if (membersRes.error) throw membersRes.error;
+    if (attendanceRes.error) throw attendanceRes.error;
+
+    return {
+      members: membersRes.data || [],
+      todayLogs: attendanceRes.data || [],
+    };
+  }, [isDemoMode, todayISO]);
+
+  const loadDashboard = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await fetchDashboardData();
+      setMembers(result.members);
+      setTodayLogs(result.todayLogs);
+    } catch (err) {
+      setError(err.message || 'Failed to load dashboard data.');
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchDashboardData]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchDashboardData()
+      .then((result) => {
+        if (cancelled) return;
+        setMembers(result.members);
+        setTodayLogs(result.todayLogs);
+        setError('');
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message || 'Failed to load dashboard data.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchDashboardData]);
+
+  // Lookup map from member id to member_overview row
+  const memberById = new Map(members.map((m) => [String(m.id), m]));
+
+  // Top KPI calculations
+  const totalMembers = members.length;
+  const maleCount = members.filter(
+    (m) => String(m.gender || '').toLowerCase() === 'male'
+  ).length;
+  const femaleCount = members.filter(
+    (m) => String(m.gender || '').toLowerCase() === 'female'
+  ).length;
+  const presentMemberIds = new Set(todayLogs.map((l) => String(l.member_id)));
+  const todayPresent = presentMemberIds.size;
+  const todayAbsent = Math.max(0, totalMembers - todayPresent);
+  const expiredMembers = members.filter(
+    (m) =>
+      String(m.status || '').toLowerCase() === 'expired' ||
+      (m.validity_days !== null && m.validity_days !== undefined && Number(m.validity_days) <= 0)
+  ).length;
+
+  const kpiCards = [
+    {
+      label: 'Total Members',
+      value: totalMembers,
+      subtext: 'Registered profiles',
+      icon: Users,
+      accentClass: 'bg-indigo-50 text-indigo-600',
+    },
+    {
+      label: 'Male',
+      value: maleCount,
+      subtext: totalMembers ? `${Math.round((maleCount / totalMembers) * 100)}% of base` : '0%',
+      icon: Users,
+      accentClass: 'bg-sky-50 text-sky-600',
+    },
+    {
+      label: 'Female',
+      value: femaleCount,
+      subtext: totalMembers ? `${Math.round((femaleCount / totalMembers) * 100)}% of base` : '0%',
+      icon: Users,
+      accentClass: 'bg-pink-50 text-pink-600',
+    },
+    {
+      label: 'Today Present',
+      value: todayPresent,
+      subtext: 'Synced via ZKFace V4.0',
+      icon: UserCheck,
+      accentClass: 'bg-emerald-50 text-emerald-600',
+      valueClass: 'text-emerald-700',
+    },
+    {
+      label: 'Today Absent',
+      value: todayAbsent,
+      subtext: 'Not punched in yet',
+      icon: UserMinus,
+      accentClass: 'bg-amber-50 text-amber-600',
+    },
+    {
+      label: 'Expired Members',
+      value: expiredMembers,
+      subtext: 'Needs renewal follow-up',
+      icon: UserX,
+      accentClass: 'bg-rose-50 text-rose-600',
+      valueClass: 'text-rose-600',
+    },
+  ];
+
+  // Today Attendance Table rows joined with member_overview
+  const attendanceRows = todayLogs
+    .map((log) => {
+      const m = memberById.get(String(log.member_id));
+      return {
+        id: log.id,
+        memberId: log.member_id,
+        name: m?.full_name || `Member #${log.member_id}`,
+        pin: m?.device_pin,
+        checkIn: formatTime(log.check_in_at),
+        checkOut: formatTime(log.check_out_at),
+        validityDays: m?.validity_days ?? null,
+        pendingAmount: Number(m?.pending_amount || 0),
+      };
+    })
+    .filter((row) => {
+      if (!globalSearch) return true;
+      return (
+        row.name.toLowerCase().includes(globalSearch) ||
+        String(row.pin ?? '').toLowerCase().includes(globalSearch)
+      );
+    });
+
+  // Expiring Soon (1..10 days remaining)
+  const expireRenewalList = members
+    .filter(
+      (m) =>
+        m.validity_days !== null &&
+        m.validity_days !== undefined &&
+        Number(m.validity_days) > 0 &&
+        Number(m.validity_days) <= 10
+    )
+    .sort((a, b) => Number(a.validity_days) - Number(b.validity_days))
+    .map((m) => ({
+      id: m.id,
+      name: m.full_name,
+      pin: m.device_pin,
+      date: formatDateDDMMYYYY(m.next_renewal),
+      badge: `In ${m.validity_days} ${Number(m.validity_days) === 1 ? 'day' : 'days'}`,
+      variant: Number(m.validity_days) <= 4 ? 'warning' : 'info',
+    }));
+
+  // Expired Memberships (validity_days <= 0 or status === 'expired')
+  const expiredMembershipList = members
+    .filter(
+      (m) =>
+        String(m.status || '').toLowerCase() === 'expired' ||
+        (m.validity_days !== null && m.validity_days !== undefined && Number(m.validity_days) <= 0)
+    )
+    .sort((a, b) => Number(b.validity_days ?? -999) - Number(a.validity_days ?? -999))
+    .map((m) => {
+      const daysAgo =
+        m.validity_days !== null && m.validity_days !== undefined
+          ? Math.abs(Number(m.validity_days))
+          : null;
+      return {
+        id: m.id,
+        name: m.full_name,
+        pin: m.device_pin,
+        date: formatDateDDMMYYYY(m.next_renewal),
+        badge: daysAgo === null ? 'Expired' : daysAgo === 0 ? 'Today' : `${daysAgo} days ago`,
+        variant: 'danger',
+      };
+    });
+
+  // Upcoming Birthdays (within next 14 days)
+  const upcomingBirthdays = members
+    .map((m) => ({ m, daysLeft: daysUntilBirthday(m.date_of_birth) }))
+    .filter(({ daysLeft }) => daysLeft !== null && daysLeft <= 14)
+    .sort((a, b) => a.daysLeft - b.daysLeft)
+    .map(({ m, daysLeft }) => ({
+      id: m.id,
+      name: m.full_name,
+      date: formatDateDDMMYYYY(m.date_of_birth),
+      badge: daysLeft === 0 ? 'Today' : `In ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`,
+      variant: daysLeft <= 3 ? 'info' : 'neutral',
+    }));
 
   return (
     <div className="space-y-6">
       {/* Page Title */}
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
             Operations Dashboard
@@ -225,132 +336,160 @@ export default function Dashboard() {
             Daily gym occupancy, biometric attendance punches, and subscription health.
           </p>
         </div>
-        <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" />
-          ZKFace V4.0 Online
-        </span>
-      </div>
 
-      {/* Top KPI Row (6 Stat Cards) */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        {KPI_CARDS.map((card) => (
-          <StatCard key={card.label} {...card} />
-        ))}
-      </div>
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={loadDashboard}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <span>Refresh</span>
+          </button>
 
-      {/* Middle Section (2-Column Grid) */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        {/* Left Card — Today Attendance (DD-MM-YYYY) */}
-        <section className="lg:col-span-7 flex flex-col rounded-xl border border-slate-200 bg-white shadow-xs">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-            <div>
-              <h2 className="text-sm font-bold text-slate-900">
-                Today Attendance ({todayFormatted})
-              </h2>
-              <p className="text-xs text-slate-500">
-                Real-time check-ins with subscription validity &amp; dues
-              </p>
-            </div>
-            <StatusBadge variant="info">{filteredAttendance.length} logs</StatusBadge>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-100 text-left text-sm">
-              <thead className="bg-slate-50/80 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                <tr>
-                  <th className="px-5 py-3">Name</th>
-                  <th className="px-4 py-3">Check In</th>
-                  <th className="px-4 py-3">Check Out</th>
-                  <th className="px-4 py-3">Validity Days</th>
-                  <th className="px-5 py-3 text-right">Pending Amount</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredAttendance.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-5 py-8 text-center text-sm text-slate-400">
-                      No attendance records match &ldquo;{outletContext.globalSearch}&rdquo;.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredAttendance.map((row) => {
-                    const isExpired = row.validityDays < 0;
-                    const isLow = row.validityDays >= 0 && row.validityDays <= 7;
-
-                    return (
-                      <tr key={row.code} className="transition hover:bg-slate-50/70">
-                        <td className="px-5 py-3.5 whitespace-nowrap">
-                          <div className="font-semibold text-slate-900">{row.name}</div>
-                          <div className="font-mono text-xs text-slate-400">{row.code}</div>
-                        </td>
-                        <td className="px-4 py-3.5 whitespace-nowrap text-slate-700">
-                          {row.checkIn}
-                        </td>
-                        <td className="px-4 py-3.5 whitespace-nowrap text-slate-500">
-                          {row.checkOut}
-                        </td>
-                        <td className="px-4 py-3.5 whitespace-nowrap">
-                          <span
-                            className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-bold ${
-                              isExpired
-                                ? 'bg-rose-50 text-rose-700 ring-1 ring-rose-200'
-                                : isLow
-                                  ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
-                                  : 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
-                            }`}
-                          >
-                            {row.validityDays} days
-                          </span>
-                        </td>
-                        <td className="px-5 py-3.5 whitespace-nowrap text-right font-semibold">
-                          {row.pendingAmount > 0 ? (
-                            <span className="text-rose-600">
-                              ₹{row.pendingAmount.toLocaleString('en-IN')}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">₹0</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        {/* Right Card — Expire Renewal */}
-        <div className="lg:col-span-5">
-          <MemberAlertListCard
-            title="Expire Renewal"
-            icon={CalendarClock}
-            iconClass="bg-amber-50 text-amber-600"
-            items={EXPIRE_RENEWAL_LIST}
-            emptyText="No upcoming renewals in the next 10 days."
-          />
+          <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            ZKFace V4.0 Online
+          </span>
         </div>
       </div>
 
-      {/* Bottom Section (2-Column Grid) */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <MemberAlertListCard
-          title="Expired Membership"
-          icon={AlertTriangle}
-          iconClass="bg-rose-50 text-rose-600"
-          items={EXPIRED_MEMBERSHIP_LIST}
-          emptyText="No expired memberships."
-        />
+      {error && (
+        <div className="flex items-center gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+          <span>{error}</span>
+        </div>
+      )}
 
-        <MemberAlertListCard
-          title="Upcoming Birthday"
-          icon={Cake}
-          iconClass="bg-indigo-50 text-indigo-600"
-          items={UPCOMING_BIRTHDAYS}
-          emptyText="No upcoming birthdays this week."
-          showCode={false}
-        />
-      </div>
+      {loading && members.length === 0 ? (
+        <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 text-slate-500">
+          <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+          <p className="text-sm font-medium">Loading dashboard metrics...</p>
+        </div>
+      ) : (
+        <>
+          {/* Top KPI Row (6 Stat Cards) */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            {kpiCards.map((card) => (
+              <StatCard key={card.label} {...card} />
+            ))}
+          </div>
+
+          {/* Middle Section (2-Column Grid) */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+            {/* Left Card — Today Attendance (DD-MM-YYYY) */}
+            <section className="lg:col-span-7 flex flex-col rounded-xl border border-slate-200 bg-white shadow-xs">
+              <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    Today Attendance ({todayFormatted})
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    Real-time check-ins with subscription validity &amp; dues
+                  </p>
+                </div>
+                <StatusBadge variant="info">{attendanceRows.length} logs</StatusBadge>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-100 text-left text-sm">
+                  <thead className="bg-slate-50/80 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    <tr>
+                      <th className="px-5 py-3">Name</th>
+                      <th className="px-4 py-3">Check In</th>
+                      <th className="px-4 py-3">Check Out</th>
+                      <th className="px-4 py-3">Validity Days</th>
+                      <th className="px-5 py-3 text-right">Pending Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {attendanceRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-5 py-8 text-center text-sm text-slate-400">
+                          {globalSearch
+                            ? `No attendance records match "${outletContext.globalSearch}".`
+                            : 'No biometric check-ins recorded today yet.'}
+                        </td>
+                      </tr>
+                    ) : (
+                      attendanceRows.map((row) => (
+                        <tr key={row.id} className="transition hover:bg-slate-50/70">
+                          <td className="px-5 py-3.5 whitespace-nowrap">
+                            <div>
+                              <MemberLink memberId={row.memberId} name={row.name} />
+                            </div>
+                            <div className="font-mono text-xs text-slate-400">
+                              PIN {displayValue(row.pin)}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3.5 whitespace-nowrap text-slate-700">
+                            {row.checkIn}
+                          </td>
+                          <td className="px-4 py-3.5 whitespace-nowrap text-slate-500">
+                            {row.checkOut}
+                          </td>
+                          <td className="px-4 py-3.5 whitespace-nowrap">
+                            <span
+                              className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-bold ${getValidityToneClass(
+                                row.validityDays
+                              )}`}
+                            >
+                              {row.validityDays === null || row.validityDays === undefined
+                                ? '—'
+                                : `${row.validityDays} days`}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3.5 whitespace-nowrap text-right font-semibold">
+                            {row.pendingAmount > 0 ? (
+                              <span className="text-rose-600">
+                                {formatCurrency(row.pendingAmount)}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">₹0</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            {/* Right Card — Expire Renewal */}
+            <div className="lg:col-span-5">
+              <MemberAlertListCard
+                title="Expire Renewal"
+                icon={CalendarClock}
+                iconClass="bg-amber-50 text-amber-600"
+                items={expireRenewalList}
+                emptyText="No upcoming renewals in the next 10 days."
+              />
+            </div>
+          </div>
+
+          {/* Bottom Section (2-Column Grid) */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <MemberAlertListCard
+              title="Expired Membership"
+              icon={AlertTriangle}
+              iconClass="bg-rose-50 text-rose-600"
+              items={expiredMembershipList}
+              emptyText="No expired memberships."
+            />
+
+            <MemberAlertListCard
+              title="Upcoming Birthday"
+              icon={Cake}
+              iconClass="bg-indigo-50 text-indigo-600"
+              items={upcomingBirthdays}
+              emptyText="No upcoming birthdays in the next 14 days."
+              showPin={false}
+            />
+          </div>
+        </>
+      )}
 
       {/* Notification Card */}
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
@@ -363,13 +502,13 @@ export default function Dashboard() {
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-bold text-slate-900">Notification</h2>
                 <StatusBadge variant={notificationState === 'sent' ? 'success' : 'neutral'}>
-                  {notificationState === 'sent' ? 'Batch Queued (10)' : 'WhatsApp Reminders Ready'}
+                  {notificationState === 'sent' ? 'Batch Queued' : 'WhatsApp Reminders Ready'}
                 </StatusBadge>
               </div>
               <p className="mt-1 text-xs text-slate-500">
                 {notificationState === 'sent'
-                  ? 'WhatsApp expiry & renewal reminders have been queued for 5 expiring and 5 expired members.'
-                  : 'Send automated WhatsApp membership renewal reminders to members expiring within 7 days or recently expired.'}
+                  ? `WhatsApp expiry & renewal reminders queued for ${expireRenewalList.length} expiring and ${expiredMembershipList.length} expired members.`
+                  : 'Send automated WhatsApp membership renewal reminders to members expiring within 10 days or recently expired.'}
               </p>
             </div>
           </div>

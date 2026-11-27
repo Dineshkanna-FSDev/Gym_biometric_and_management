@@ -6,6 +6,7 @@ import Landing from './pages/public/Landing';
 import Login from './pages/public/Login';
 import Dashboard from './pages/admin/Dashboard';
 import Members from './pages/admin/Members';
+import MemberProfile from './pages/admin/MemberProfile';
 import Attendance from './pages/admin/Attendance';
 import Payments from './pages/admin/Payments';
 import Analytics from './pages/admin/Analytics';
@@ -25,6 +26,7 @@ export default function App() {
               <Route index element={<Navigate to="/admin/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
               <Route path="members" element={<Members />} />
+              <Route path="members/:id" element={<MemberProfile />} />
               <Route path="attendance" element={<Attendance />} />
               <Route path="payments" element={<Payments />} />
               <Route path="analytics" element={<Analytics />} />

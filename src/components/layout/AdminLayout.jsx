@@ -8,11 +8,11 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
-  Search,
   Users,
   X,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
+import GlobalMemberSearch from './GlobalMemberSearch';
 
 const ADMIN_NAV_ITEMS = [
   { label: 'DASHBOARD', to: '/admin/dashboard', icon: LayoutDashboard },
@@ -102,19 +102,8 @@ export default function AdminLayout() {
           </div>
         </div>
 
-        {/* Center: Rounded Global Search Input */}
-        <div className="flex-1 max-w-md">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              type="search"
-              value={globalSearch}
-              onChange={(e) => setGlobalSearch(e.target.value)}
-              placeholder="Search Member Name or Code..."
-              className="w-full rounded-full border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm text-slate-800 placeholder:text-slate-400 transition focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-            />
-          </div>
-        </div>
+        {/* Center: Global Member Search & Quick Jump */}
+        <GlobalMemberSearch value={globalSearch} onChange={setGlobalSearch} />
 
         {/* Right: Admin Greeting */}
         <div className="flex items-center gap-2.5">
