@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react';
 import { CreditCard, Loader2, RefreshCw, Wallet } from 'lucide-react';
-import { isSupabaseConfigured, supabase } from '../../lib/supabase';
+import { supabase } from '../../lib/supabase';
 import {
-  PAYMENT_METHODS,
+  PAYMENT_MODES,
   addDaysToISO,
   ensureAndFetchSubscriptionPlans,
   formatPlanOptionLabel,
   getTodayISO,
 } from '../../lib/subscriptionPlans';
-import { useAuth } from '../../hooks/useAuth';
 import Modal from '../ui/Modal';
 import StatusBadge from '../ui/StatusBadge';
 import {
@@ -45,9 +44,9 @@ function resolveRenewStartDate(targetMember, today) {
 }
 
 /**
- * Unified "Renew / Billing" modal handling both:
- * 1. "Clear Pending Balance" (collects due on active subscription + updates member_subscriptions.paid_amount)
- * 2. "Renew / Change Package" (creates new member_subscriptions row + logs payment)
+ * Unified "Renew / Billing" modal backed directly by Supabase:
+ * 1. "Clear Pending Balance" (inserts into `public.payments` & updates `member_subscriptions.paid_amount`)
+ * 2. "Renew / Change Package" (creates `member_subscriptions` row & logs `public.payments`)
  */
 export default function RenewBillingModal({
   isOpen,
@@ -77,8 +76,6 @@ export default function RenewBillingModal({
 }
 
 function RenewBillingForm({ onClose, member, membersList, onSuccess }) {
-  const { isDemoMode } = useAuth();
-
   const [initialMember] = useState(
     () =>
       member ||
@@ -97,7 +94,7 @@ function RenewBillingForm({ onClose, member, membersList, onSuccess }) {
 
   // Clear Balance fields
   const [balancePayAmount, setBalancePayAmount] = useState('');
-  const [balanceMethod, setBalanceMethod] = useState('UPI');
+  const [balanceMode, setBalanceMode] = useState('UPI');
   const [balanceDate, setBalanceDate] = useState(() => getTodayISO());
   const [balanceNotes, setBalanceNotes] = useState('');
 
@@ -109,7 +106,7 @@ function RenewBillingForm({ onClose, member, membersList, onSuccess }) {
   const [renewEndDate, setRenewEndDate] = useState('');
   const [renewPayable, setRenewPayable] = useState('');
   const [renewPaid, setRenewPaid] = useState('');
-  const [renewMethod, setRenewMethod] = useState('UPI');
+  const [renewMode, setRenewMode] = useState('UPI');
   const [renewNotes, setRenewNotes] = useState('');
   const [renewPaidManuallyEdited, setRenewPaidManuallyEdited] = useState(false);
 
@@ -126,17 +123,15 @@ function RenewBillingForm({ onClose, member, membersList, onSuccess }) {
     const nextMode = resolveDefaultMode(targetMember);
     setMode(nextMode);
 
-    // Clear balance defaults
     const pending = Math.max(0, Number(targetMember?.pending_amount || 0));
     setBalancePayAmount(pending > 0 ? String(pending) : '');
-    setBalanceMethod('UPI');
+    setBalanceMode('UPI');
     setBalanceDate(today);
     setBalanceNotes('');
 
-    // Renew defaults
     const start = resolveRenewStartDate(targetMember, today);
     setRenewStartDate(start);
-    setRenewMethod('UPI');
+    setRenewMode('UPI');
     setRenewNotes('');
     setRenewPaidManuallyEdited(false);
 
@@ -163,7 +158,7 @@ function RenewBillingForm({ onClose, member, membersList, onSuccess }) {
   useEffect(() => {
     let cancelled = false;
 
-    ensureAndFetchSubscriptionPlans(isDemoMode)
+    ensureAndFetchSubscriptionPlans()
       .then((loadedPlans) => {
         if (cancelled) return;
         setPlans(loadedPlans);
@@ -181,7 +176,7 @@ function RenewBillingForm({ onClose, member, membersList, onSuccess }) {
     return () => {
       cancelled = true;
     };
-  }, [isDemoMode, initialMember]);
+  }, [initialMember]);
 
   function handleMemberDropdownChange(nextId) {
     setSelectedMemberId(nextId);
@@ -244,26 +239,11 @@ function RenewBillingForm({ onClose, member, membersList, onSuccess }) {
 
         const nextPaidTotal = Number(activeMember.paid_amount || 0) + payAmt;
 
-        if (isDemoMode || !isSupabaseConfigured || !supabase) {
-          onSuccess?.({
-            type: 'clear_balance',
-            memberId: activeMember.id,
-            subscriptionId: activeMember.subscription_id,
-            amountPaid: payAmt,
-            paymentMethod: balanceMethod,
-            paymentDate: balanceDate || today,
-            notes: balanceNotes.trim() || null,
-            nextPaidTotal,
-          });
-          onClose();
-          return;
-        }
-
         const { error: payErr } = await supabase.from('payments').insert({
           member_id: activeMember.id,
           subscription_id: activeMember.subscription_id,
           amount: payAmt,
-          payment_method: balanceMethod,
+          payment_mode: balanceMode,
           payment_date: balanceDate || today,
           notes: balanceNotes.trim() || null,
         });
@@ -284,27 +264,8 @@ function RenewBillingForm({ onClose, member, membersList, onSuccess }) {
         return;
       }
 
-      // Mode: Renew / Change Package
       if (!selectedPlan || !renewStartDate || !renewEndDate) {
         throw new Error('Please select a package and valid start/end dates.');
-      }
-
-      if (isDemoMode || !isSupabaseConfigured || !supabase) {
-        onSuccess?.({
-          type: 'renew',
-          memberId: activeMember.id,
-          plan: selectedPlan,
-          startDate: renewStartDate,
-          endDate: renewEndDate,
-          payableAmount: renewPayableNum,
-          paidAmount: renewPaidNum,
-          pendingAmount: renewPendingBalance,
-          paymentMethod: renewMethod,
-          paymentDate: today,
-          notes: renewNotes.trim() || null,
-        });
-        onClose();
-        return;
       }
 
       const { data: createdSub, error: subErr } = await supabase
@@ -327,7 +288,7 @@ function RenewBillingForm({ onClose, member, membersList, onSuccess }) {
           member_id: activeMember.id,
           subscription_id: createdSub.id,
           amount: renewPaidNum,
-          payment_method: renewMethod,
+          payment_mode: renewMode,
           payment_date: today,
           notes: renewNotes.trim() || null,
         });
@@ -349,356 +310,355 @@ function RenewBillingForm({ onClose, member, membersList, onSuccess }) {
   }
 
   return (
-      <form onSubmit={handleSubmit} className="space-y-5">
-        {error && (
-          <div className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-medium text-rose-700">
-            {error}
-          </div>
-        )}
+    <form onSubmit={handleSubmit} className="space-y-5">
+      {error && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-medium text-rose-700">
+          {error}
+        </div>
+      )}
 
-        {/* Member Selector (if opened without a pre-selected member) */}
-        {!member ? (
-          <div>
-            <label className="block text-xs font-semibold text-slate-700">Select Member</label>
-            <select
-              required
-              value={selectedMemberId}
-              onChange={(e) => handleMemberDropdownChange(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 focus:border-indigo-500 focus:outline-none"
-            >
-              <option value="">Choose a member...</option>
-              {membersList.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.full_name} (PIN {displayValue(m.device_pin)})
-                  {Number(m.pending_amount || 0) > 0
-                    ? ` — Due ${formatCurrency(m.pending_amount)}`
-                    : ''}
-                </option>
-              ))}
-            </select>
+      {/* Member Selector (if opened without a pre-selected member) */}
+      {!member ? (
+        <div>
+          <label className="block text-xs font-semibold text-slate-700">Select Member</label>
+          <select
+            required
+            value={selectedMemberId}
+            onChange={(e) => handleMemberDropdownChange(e.target.value)}
+            className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 focus:border-indigo-500 focus:outline-none"
+          >
+            <option value="">Choose a member...</option>
+            {membersList.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.full_name} (PIN {displayValue(m.device_pin)})
+                {Number(m.pending_amount || 0) > 0
+                  ? ` — Due ${formatCurrency(m.pending_amount)}`
+                  : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold text-slate-900">
+              {displayValue(activeMember?.full_name)}
+            </p>
+            <p className="text-xs text-slate-500">
+              PIN {displayValue(activeMember?.device_pin)} •{' '}
+              {displayValue(activeMember?.active_package, 'No active plan')}
+            </p>
           </div>
-        ) : (
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-bold text-slate-900">
-                {displayValue(activeMember?.full_name)}
-              </p>
-              <p className="text-xs text-slate-500">
-                PIN {displayValue(activeMember?.device_pin)} •{' '}
-                {displayValue(activeMember?.active_package, 'No active plan')}
-              </p>
-            </div>
-            <StatusBadge
-              variant={getMemberStatusVariant(activeMember?.status)}
-              className="shrink-0 capitalize"
-            >
-              {displayValue(activeMember?.status, 'unknown')}
-            </StatusBadge>
-          </div>
-        )}
+          <StatusBadge
+            variant={getMemberStatusVariant(activeMember?.status)}
+            className="shrink-0 capitalize"
+          >
+            {displayValue(activeMember?.status, 'unknown')}
+          </StatusBadge>
+        </div>
+      )}
 
-        {/* Mode Switch */}
-        <div
-          className="grid grid-cols-2 gap-1.5 rounded-xl bg-slate-100 p-1"
-          role="tablist"
-          aria-label="Billing mode"
+      {/* Mode Switch */}
+      <div
+        className="grid grid-cols-2 gap-1.5 rounded-xl bg-slate-100 p-1"
+        role="tablist"
+        aria-label="Billing mode"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'clear_balance'}
+          disabled={!canClearBalance}
+          onClick={() => {
+            setError('');
+            setMode('clear_balance');
+          }}
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition ${
+            mode === 'clear_balance'
+              ? 'bg-white text-indigo-600 shadow-2xs'
+              : 'text-slate-600 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-45'
+          }`}
         >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'clear_balance'}
-            disabled={!canClearBalance}
-            onClick={() => {
-              setError('');
-              setMode('clear_balance');
-            }}
-            className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition ${
-              mode === 'clear_balance'
-                ? 'bg-white text-indigo-600 shadow-2xs'
-                : 'text-slate-600 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-45'
-            }`}
-          >
-            <Wallet className="h-3.5 w-3.5" />
-            <span>Clear Pending Balance</span>
-          </button>
+          <Wallet className="h-3.5 w-3.5" />
+          <span>Clear Pending Balance</span>
+        </button>
 
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'renew'}
-            onClick={() => {
-              setError('');
-              setMode('renew');
-            }}
-            className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition ${
-              mode === 'renew'
-                ? 'bg-white text-indigo-600 shadow-2xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>Renew / Change Package</span>
-          </button>
-        </div>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'renew'}
+          onClick={() => {
+            setError('');
+            setMode('renew');
+          }}
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition ${
+            mode === 'renew'
+              ? 'bg-white text-indigo-600 shadow-2xs'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          <span>Renew / Change Package</span>
+        </button>
+      </div>
 
-        {mode === 'clear_balance' ? (
-          <div className="space-y-4">
-            {/* Active Subscription Financial Summary */}
-            <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4 sm:grid-cols-4">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                  Current Plan
-                </p>
-                <p className="mt-1 text-xs font-bold text-slate-900">
-                  {displayValue(activeMember?.active_package, '—')}
-                </p>
-              </div>
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                  Total Payable
-                </p>
-                <p className="mt-1 text-xs font-bold text-slate-900">
-                  {formatCurrency(activeMember?.amount)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                  Already Paid
-                </p>
-                <p className="mt-1 text-xs font-bold text-emerald-700">
-                  {formatCurrency(activeMember?.paid_amount)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-rose-500">
-                  Remaining Due
-                </p>
-                <p className="mt-1 text-sm font-extrabold text-rose-700">
-                  {formatCurrency(currentPending)}
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Payment Amount (₹)
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max={currentPending > 0 ? currentPending : undefined}
-                  required
-                  value={balancePayAmount}
-                  onChange={(e) => setBalancePayAmount(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Payment Method
-                </label>
-                <select
-                  value={balanceMethod}
-                  onChange={(e) => setBalanceMethod(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                >
-                  {PAYMENT_METHODS.map((method) => (
-                    <option key={method} value={method}>
-                      {method}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Payment Date
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={balanceDate}
-                  onChange={(e) => setBalanceDate(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">Notes</label>
-                <input
-                  type="text"
-                  value={balanceNotes}
-                  onChange={(e) => setBalanceNotes(e.target.value)}
-                  placeholder="Optional receipt reference"
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {activeMember?.next_renewal && (
-              <p className="rounded-lg border border-indigo-100 bg-indigo-50/70 px-3 py-2 text-xs text-indigo-800">
-                Current renewal date:{' '}
-                <span className="font-bold">{formatDate(activeMember.next_renewal)}</span>. Start
-                date is auto-set to{' '}
-                <span className="font-bold">{formatDate(renewStartDate)}</span>.
+      {mode === 'clear_balance' ? (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4 sm:grid-cols-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Current Plan
               </p>
-            )}
-
-            <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-semibold text-slate-700">
-                  Select Package
-                </label>
-                <select
-                  required
-                  disabled={plansLoading}
-                  value={selectedPlanId}
-                  onChange={(e) => handleRenewPlanChange(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium focus:border-indigo-500 focus:outline-none disabled:opacity-60"
-                >
-                  {plansLoading ? (
-                    <option value="">Loading packages...</option>
-                  ) : (
-                    plans.map((plan) => (
-                      <option key={plan.id} value={plan.id}>
-                        {formatPlanOptionLabel(plan)}
-                      </option>
-                    ))
-                  )}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">Start Date</label>
-                <input
-                  type="date"
-                  required
-                  value={renewStartDate}
-                  onChange={(e) => handleRenewStartChange(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  End Date {selectedPlan ? `(${selectedPlan.duration_days} days)` : ''}
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={renewEndDate}
-                  onChange={(e) => setRenewEndDate(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Payable Amount (₹)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  required
-                  value={renewPayable}
-                  onChange={(e) => {
-                    setRenewPayable(e.target.value);
-                    if (!renewPaidManuallyEdited) setRenewPaid(e.target.value);
-                  }}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Paid Now (₹)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  required
-                  value={renewPaid}
-                  onChange={(e) => {
-                    setRenewPaidManuallyEdited(true);
-                    setRenewPaid(e.target.value);
-                  }}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Pending Balance
-                </label>
-                <div
-                  className={`mt-1 flex h-[38px] items-center rounded-xl border px-3 text-sm font-bold ${
-                    renewPendingBalance > 0
-                      ? 'border-rose-200 bg-rose-50 text-rose-700'
-                      : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                  }`}
-                >
-                  {formatCurrency(renewPendingBalance)}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Payment Method
-                </label>
-                <select
-                  value={renewMethod}
-                  onChange={(e) => setRenewMethod(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                >
-                  {PAYMENT_METHODS.map((method) => (
-                    <option key={method} value={method}>
-                      {method}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-semibold text-slate-700">Notes</label>
-                <input
-                  type="text"
-                  value={renewNotes}
-                  onChange={(e) => setRenewNotes(e.target.value)}
-                  placeholder="Optional renewal or payment note"
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                />
-              </div>
+              <p className="mt-1 text-xs font-bold text-slate-900">
+                {displayValue(activeMember?.active_package, '—')}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Total Payable
+              </p>
+              <p className="mt-1 text-xs font-bold text-slate-900">
+                {formatCurrency(activeMember?.amount)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Already Paid
+              </p>
+              <p className="mt-1 text-xs font-bold text-emerald-700">
+                {formatCurrency(activeMember?.paid_amount)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-rose-500">
+                Remaining Due
+              </p>
+              <p className="mt-1 text-sm font-extrabold text-rose-700">
+                {formatCurrency(currentPending)}
+              </p>
             </div>
           </div>
-        )}
 
-        <div className="flex justify-end gap-2.5 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={submitting || plansLoading || !activeMember}
-            className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 disabled:opacity-60"
-          >
-            {submitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <CreditCard className="h-4 w-4" />
-            )}
-            <span>
-              {mode === 'clear_balance' ? 'Record Balance Payment' : 'Confirm Renewal & Payment'}
-            </span>
-          </button>
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">
+                Payment Amount (₹)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max={currentPending > 0 ? currentPending : undefined}
+                required
+                value={balancePayAmount}
+                onChange={(e) => setBalancePayAmount(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">
+                Payment Mode
+              </label>
+              <select
+                value={balanceMode}
+                onChange={(e) => setBalanceMode(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+              >
+                {PAYMENT_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">
+                Payment Date
+              </label>
+              <input
+                type="date"
+                required
+                value={balanceDate}
+                onChange={(e) => setBalanceDate(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">Notes</label>
+              <input
+                type="text"
+                value={balanceNotes}
+                onChange={(e) => setBalanceNotes(e.target.value)}
+                placeholder="Optional receipt reference"
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+          </div>
         </div>
-      </form>
+      ) : (
+        <div className="space-y-4">
+          {activeMember?.next_renewal && (
+            <p className="rounded-lg border border-indigo-100 bg-indigo-50/70 px-3 py-2 text-xs text-indigo-800">
+              Current renewal date:{' '}
+              <span className="font-bold">{formatDate(activeMember.next_renewal)}</span>. Start
+              date is auto-set to{' '}
+              <span className="font-bold">{formatDate(renewStartDate)}</span>.
+            </p>
+          )}
+
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-semibold text-slate-700">
+                Select Package
+              </label>
+              <select
+                required
+                disabled={plansLoading}
+                value={selectedPlanId}
+                onChange={(e) => handleRenewPlanChange(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium focus:border-indigo-500 focus:outline-none disabled:opacity-60"
+              >
+                {plansLoading ? (
+                  <option value="">Loading packages...</option>
+                ) : (
+                  plans.map((plan) => (
+                    <option key={plan.id} value={plan.id}>
+                      {formatPlanOptionLabel(plan)}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">Start Date</label>
+              <input
+                type="date"
+                required
+                value={renewStartDate}
+                onChange={(e) => handleRenewStartChange(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">
+                End Date {selectedPlan ? `(${selectedPlan.duration_days} days)` : ''}
+              </label>
+              <input
+                type="date"
+                required
+                value={renewEndDate}
+                onChange={(e) => setRenewEndDate(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">
+                Payable Amount (₹)
+              </label>
+              <input
+                type="number"
+                min="0"
+                required
+                value={renewPayable}
+                onChange={(e) => {
+                  setRenewPayable(e.target.value);
+                  if (!renewPaidManuallyEdited) setRenewPaid(e.target.value);
+                }}
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">
+                Paid Now (₹)
+              </label>
+              <input
+                type="number"
+                min="0"
+                required
+                value={renewPaid}
+                onChange={(e) => {
+                  setRenewPaidManuallyEdited(true);
+                  setRenewPaid(e.target.value);
+                }}
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">
+                Pending Balance
+              </label>
+              <div
+                className={`mt-1 flex h-[38px] items-center rounded-xl border px-3 text-sm font-bold ${
+                  renewPendingBalance > 0
+                    ? 'border-rose-200 bg-rose-50 text-rose-700'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                }`}
+              >
+                {formatCurrency(renewPendingBalance)}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">
+                Payment Mode
+              </label>
+              <select
+                value={renewMode}
+                onChange={(e) => setRenewMode(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+              >
+                {PAYMENT_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-semibold text-slate-700">Notes</label>
+              <input
+                type="text"
+                value={renewNotes}
+                onChange={(e) => setRenewNotes(e.target.value)}
+                placeholder="Optional renewal or payment note"
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2.5 pt-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={submitting || plansLoading || !activeMember}
+          className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 disabled:opacity-60"
+        >
+          {submitting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <CreditCard className="h-4 w-4" />
+          )}
+          <span>
+            {mode === 'clear_balance' ? 'Record Balance Payment' : 'Confirm Renewal & Payment'}
+          </span>
+        </button>
+      </div>
+    </form>
   );
 }

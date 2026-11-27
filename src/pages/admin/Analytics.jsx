@@ -9,7 +9,6 @@ import {
   CreditCard,
   Download,
   IndianRupee,
-  Loader2,
   MessageCircle,
   RefreshCw,
   ScanFace,
@@ -17,20 +16,14 @@ import {
   Users,
   Wallet,
 } from 'lucide-react';
-import { isSupabaseConfigured, supabase } from '../../lib/supabase';
+import { supabase } from '../../lib/supabase';
 import { addDaysToISO, ensureAndFetchSubscriptionPlans, getTodayISO } from '../../lib/subscriptionPlans';
-import { useAuth } from '../../hooks/useAuth';
-import {
-  DEMO_ATTENDANCE_LOGS,
-  DEMO_MEMBERS_OVERVIEW,
-  DEMO_PAYMENTS,
-  DEMO_SUBSCRIPTIONS,
-} from '../../data/demoData';
 import StatCard from '../../components/ui/StatCard';
 import StatusBadge from '../../components/ui/StatusBadge';
 import MemberLink from '../../components/ui/MemberLink';
 import PeakHourHeatmap from '../../components/analytics/PeakHourHeatmap';
 import FootfallChart from '../../components/analytics/FootfallChart';
+import { KpiGridSkeleton } from '../../components/ui/LoadingSkeletons';
 import {
   DATE_RANGE_OPTIONS,
   buildDailyFootfallSeries,
@@ -51,15 +44,13 @@ import {
 } from '../../utils/formatters';
 
 /**
- * Full Gym Analytics Workspace (/admin/analytics) backed by live Supabase
+ * Full Gym Analytics Workspace (/admin/analytics) backed strictly by live Supabase
  * queries across attendance_logs, members, member_overview,
  * member_subscriptions, payments, and subscription_plans.
  */
 export default function Analytics() {
-  const { isDemoMode } = useAuth();
-
   const [rangeKey, setRangeKey] = useState('30d');
-  const [faceFilter, setFaceFilter] = useState('pending'); // 'pending' | 'all'
+  const [faceFilter, setFaceFilter] = useState('pending');
 
   const [dataset, setDataset] = useState({
     attendanceLogs: [],
@@ -74,66 +65,51 @@ export default function Analytics() {
 
   const windowInfo = getAnalyticsDateWindow(rangeKey);
 
-  const fetchAnalyticsDataset = useCallback(
-    async (selectedRange) => {
-      const win = getAnalyticsDateWindow(selectedRange);
-      const tenDaysAgo = addDaysToISO(win.endISO, -9);
-      const attendanceFloor = win.startISO < tenDaysAgo ? win.startISO : tenDaysAgo;
+  const fetchAnalyticsDataset = useCallback(async (selectedRange) => {
+    const win = getAnalyticsDateWindow(selectedRange);
+    const tenDaysAgo = addDaysToISO(win.endISO, -9);
+    const attendanceFloor = win.startISO < tenDaysAgo ? win.startISO : tenDaysAgo;
 
-      if (isDemoMode || !isSupabaseConfigured || !supabase) {
-        const plans = await ensureAndFetchSubscriptionPlans(true);
-        return {
-          attendanceLogs: DEMO_ATTENDANCE_LOGS,
-          members: DEMO_MEMBERS_OVERVIEW,
-          memberOverview: DEMO_MEMBERS_OVERVIEW,
-          subscriptions: DEMO_SUBSCRIPTIONS,
-          payments: DEMO_PAYMENTS,
-          plans,
-        };
-      }
+    const [attRes, membersRes, overviewRes, subsRes, payRes, plans] = await Promise.all([
+      supabase
+        .from('attendance_logs')
+        .select('id, member_id, attendance_date, check_in_at, check_out_at, duration_minutes, status')
+        .gte('attendance_date', attendanceFloor)
+        .order('check_in_at', { ascending: false })
+        .limit(5000),
+      supabase
+        .from('members')
+        .select('id, full_name, device_pin, phone, gender, date_of_birth, face_enrolled, status')
+        .limit(2000),
+      supabase.from('member_overview').select('*').limit(2000),
+      supabase
+        .from('member_subscriptions')
+        .select('id, member_id, plan_id, start_date, end_date, payable_amount, paid_amount')
+        .limit(3000),
+      supabase
+        .from('payments')
+        .select('id, member_id, subscription_id, amount, payment_mode, payment_date, paid_at')
+        .gte('payment_date', win.startISO)
+        .lte('payment_date', win.endISO)
+        .limit(3000),
+      ensureAndFetchSubscriptionPlans().catch(() => []),
+    ]);
 
-      const [attRes, membersRes, overviewRes, subsRes, payRes, plans] = await Promise.all([
-        supabase
-          .from('attendance_logs')
-          .select('id, member_id, attendance_date, check_in_at, check_out_at, duration_minutes, status')
-          .gte('attendance_date', attendanceFloor)
-          .order('check_in_at', { ascending: false })
-          .limit(5000),
-        supabase
-          .from('members')
-          .select('id, full_name, device_pin, phone, gender, date_of_birth, face_enrolled, status')
-          .limit(2000),
-        supabase.from('member_overview').select('*').limit(2000),
-        supabase
-          .from('member_subscriptions')
-          .select('id, member_id, plan_id, start_date, end_date, payable_amount, paid_amount')
-          .limit(3000),
-        supabase
-          .from('payments')
-          .select('id, member_id, subscription_id, amount, payment_method, payment_date, created_at')
-          .gte('payment_date', win.startISO)
-          .lte('payment_date', win.endISO)
-          .limit(3000),
-        ensureAndFetchSubscriptionPlans(false).catch(() => []),
-      ]);
+    if (attRes.error) throw attRes.error;
+    if (membersRes.error) throw membersRes.error;
+    if (overviewRes.error) throw overviewRes.error;
+    if (subsRes.error) throw subsRes.error;
+    if (payRes.error) throw payRes.error;
 
-      if (attRes.error) throw attRes.error;
-      if (membersRes.error) throw membersRes.error;
-      if (overviewRes.error) throw overviewRes.error;
-      if (subsRes.error) throw subsRes.error;
-      if (payRes.error) throw payRes.error;
-
-      return {
-        attendanceLogs: attRes.data || [],
-        members: membersRes.data || [],
-        memberOverview: overviewRes.data || [],
-        subscriptions: subsRes.data || [],
-        payments: payRes.data || [],
-        plans: plans || [],
-      };
-    },
-    [isDemoMode]
-  );
+    return {
+      attendanceLogs: attRes.data || [],
+      members: membersRes.data || [],
+      memberOverview: overviewRes.data || [],
+      subscriptions: subsRes.data || [],
+      payments: payRes.data || [],
+      plans: plans || [],
+    };
+  }, []);
 
   const loadAnalytics = useCallback(async () => {
     setLoading(true);
@@ -167,7 +143,6 @@ export default function Analytics() {
     };
   }, [fetchAnalyticsDataset, rangeKey]);
 
-  // Filter attendance logs and payments strictly within the selected window
   const logsInRange = dataset.attendanceLogs.filter((log) => {
     const istDate = toISTParts(log.check_in_at)?.dateISO;
     const dateVal = istDate || (log.attendance_date ? String(log.attendance_date).slice(0, 10) : '');
@@ -175,12 +150,12 @@ export default function Analytics() {
   });
 
   const paymentsInRange = dataset.payments.filter((pay) => {
-    const pDate = String(pay.payment_date || pay.created_at || '').slice(0, 10);
+    const pDate = String(pay.payment_date || pay.paid_at || '').slice(0, 10);
     if (!pDate) return false;
     return pDate >= windowInfo.startISO && pDate <= windowInfo.endISO;
   });
 
-  // Section 2: Top KPI Calculations
+  // Top KPI Calculations
   const collectedRevenue = paymentsInRange.reduce((sum, p) => sum + Number(p.amount || 0), 0);
   const pendingDues = dataset.memberOverview.reduce(
     (sum, m) => sum + Math.max(0, Number(m.pending_amount || 0)),
@@ -203,7 +178,6 @@ export default function Analytics() {
         )
       : null;
 
-  // Section 3: Peak Hour Heatmap & Daily Footfall
   const heatmap = buildPeakHourHeatmap(logsInRange);
   const dailySeries = buildDailyFootfallSeries(
     logsInRange,
@@ -211,7 +185,6 @@ export default function Analytics() {
     windowInfo.endISO
   );
 
-  // Section 4: Revenue & Package Performance
   const { packageRows, methodRows } = buildRevenueAnalytics({
     paymentsInRange,
     subscriptions: dataset.subscriptions,
@@ -221,7 +194,6 @@ export default function Analytics() {
   const maxPackageRevenue = Math.max(1, ...packageRows.map((p) => p.revenue));
   const totalMethodRevenue = methodRows.reduce((sum, m) => sum + m.amount, 0);
 
-  // Section 5: Membership Health & Early Churn Risk ("Paid but Absent")
   const subCountByMember = new Map();
   for (const sub of dataset.subscriptions) {
     const key = String(sub.member_id);
@@ -250,7 +222,6 @@ export default function Analytics() {
     renewed: Array.from(subCountByMember.values()).filter((count) => count > 1).length,
   };
 
-  // Last check-in date per member and 10-day absence detection
   const todayISO = getTodayISO();
   const tenDaysAgoISO = addDaysToISO(todayISO, -9);
   const lastCheckInByMember = new Map();
@@ -288,7 +259,6 @@ export default function Analytics() {
     }))
     .sort((a, b) => Number(a.validity_days) - Number(b.validity_days));
 
-  // Section 6: Demographics & Biometric Face Enrollment Readiness
   const demographics = buildDemographics(dataset.members);
   const totalMembersCount = Math.max(1, dataset.members.length);
 
@@ -382,13 +352,16 @@ export default function Analytics() {
       )}
 
       {loading && dataset.memberOverview.length === 0 ? (
-        <div className="flex min-h-[45vh] flex-col items-center justify-center gap-3 text-slate-500">
-          <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
-          <p className="text-sm font-medium">Loading live gym analytics...</p>
+        <div className="space-y-6">
+          <KpiGridSkeleton count={4} colsClass="grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" />
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+            <div className="xl:col-span-7 h-72 animate-pulse rounded-2xl border border-slate-200 bg-white" />
+            <div className="xl:col-span-5 h-72 animate-pulse rounded-2xl border border-slate-200 bg-white" />
+          </div>
         </div>
       ) : (
         <>
-          {/* 2. Top KPI Summary Cards */}
+          {/* Top KPI Summary Cards */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
               label="Collected Revenue"
@@ -424,7 +397,7 @@ export default function Analytics() {
             />
           </div>
 
-          {/* 3. Peak Hour Heatmap & Daily Footfall Chart */}
+          {/* Peak Hour Heatmap & Daily Footfall Chart */}
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
             <div className="xl:col-span-7">
               <PeakHourHeatmap heatmap={heatmap} />
@@ -434,7 +407,7 @@ export default function Analytics() {
             </div>
           </div>
 
-          {/* 4. Revenue & Package Performance */}
+          {/* Revenue & Package Performance */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
             <section className="lg:col-span-7 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs">
               <div className="flex items-center justify-between border-b border-slate-100 pb-4">
@@ -483,7 +456,7 @@ export default function Analytics() {
                 <div className="flex items-center gap-2">
                   <CreditCard className="h-4 w-4 text-indigo-600" />
                   <h2 className="text-sm font-bold text-slate-900">
-                    Payment Method Breakdown
+                    Payment Mode Breakdown
                   </h2>
                 </div>
                 <span className="text-xs font-bold text-slate-700">
@@ -498,7 +471,10 @@ export default function Analytics() {
                       ? Math.round((row.amount / totalMethodRevenue) * 100)
                       : 0;
                   return (
-                    <div key={row.method} className="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
+                    <div
+                      key={row.method}
+                      className="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5"
+                    >
                       <div className="flex items-center justify-between text-sm">
                         <div>
                           <span className="font-bold text-slate-900">{row.method}</span>
@@ -528,7 +504,7 @@ export default function Analytics() {
             </section>
           </div>
 
-          {/* 5. Retention, Churn & "Slipping Away" Alerts */}
+          {/* Retention, Churn & Early Churn Risk */}
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs space-y-5">
             <div className="flex flex-col gap-1 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
@@ -542,7 +518,6 @@ export default function Analytics() {
               </StatusBadge>
             </div>
 
-            {/* Membership Health Summary */}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
@@ -572,7 +547,6 @@ export default function Analytics() {
               </div>
             </div>
 
-            {/* Paid but Absent (0 check-ins in last 10 days) */}
             <div className="overflow-hidden rounded-xl border border-slate-200">
               <div className="bg-slate-50 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-600">
                 Active Members with 0 Check-ins in Last 10 Days
@@ -645,9 +619,8 @@ export default function Analytics() {
             </div>
           </section>
 
-          {/* 6. Demographic & Biometric Readiness Breakdown */}
+          {/* Demographic & Biometric Readiness Breakdown */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-            {/* Gender & Age Distribution */}
             <section className="lg:col-span-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs space-y-5">
               <div className="flex items-center gap-2 border-b border-slate-100 pb-4">
                 <Users className="h-4 w-4 text-indigo-600" />
@@ -662,7 +635,9 @@ export default function Analytics() {
                 </h3>
                 <div className="mt-3 space-y-2.5">
                   {demographics.genders.map((g) => {
-                    const pct = Math.round((g.count / totalMembersCount) * 100);
+                    const pct = dataset.members.length
+                      ? Math.round((g.count / totalMembersCount) * 100)
+                      : 0;
                     return (
                       <div key={g.label} className="space-y-1">
                         <div className="flex justify-between text-xs font-semibold">
@@ -701,7 +676,6 @@ export default function Analytics() {
               </div>
             </section>
 
-            {/* Biometric Face Enrollment Readiness */}
             <section className="lg:col-span-7 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs space-y-4">
               <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-2">
@@ -742,7 +716,6 @@ export default function Analytics() {
                 </div>
               </div>
 
-              {/* Enrollment Ratio Progress Bar */}
               <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-4">
                 <div className="flex items-center justify-between text-xs font-semibold">
                   <span className="text-emerald-700">
@@ -760,7 +733,6 @@ export default function Analytics() {
                 </div>
               </div>
 
-              {/* List */}
               <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-100">
                 {displayedFaceMembers.length === 0 ? (
                   <p className="py-8 text-center text-sm text-slate-400">

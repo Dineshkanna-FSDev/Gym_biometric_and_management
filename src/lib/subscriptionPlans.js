@@ -1,5 +1,4 @@
-import { isSupabaseConfigured, supabase } from './supabase';
-import { DEMO_SUBSCRIPTION_PLANS } from '../data/demoData';
+import { supabase } from './supabase';
 
 export const REQUIRED_SUBSCRIPTION_PLANS = [
   { name: '1 Month GYM', price: 1000, duration_days: 30 },
@@ -11,14 +10,20 @@ export const REQUIRED_SUBSCRIPTION_PLANS = [
   { name: 'Annual Package', price: 10000, duration_days: 365 },
 ];
 
-export const PAYMENT_METHODS = ['Cash', 'UPI', 'Card', 'Bank Transfer'];
+export const PAYMENT_MODES = ['Cash', 'UPI', 'Card', 'Bank Transfer'];
 
+const IST_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+/**
+ * Returns today's calendar date (YYYY-MM-DD) in Asia/Kolkata (IST).
+ */
 export function getTodayISO() {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
+  return IST_DATE_FORMATTER.format(new Date());
 }
 
 /**
@@ -49,11 +54,7 @@ export function formatPlanOptionLabel(plan) {
  * Ensures the 7 required subscription packages exist in `public.subscription_plans`
  * (inserting any missing ones) and returns active plans sorted by price ascending.
  */
-export async function ensureAndFetchSubscriptionPlans(isDemoMode) {
-  if (isDemoMode || !isSupabaseConfigured || !supabase) {
-    return [...DEMO_SUBSCRIPTION_PLANS];
-  }
-
+export async function ensureAndFetchSubscriptionPlans() {
   const initialRes = await supabase
     .from('subscription_plans')
     .select('*')
@@ -76,7 +77,6 @@ export async function ensureAndFetchSubscriptionPlans(isDemoMode) {
     const withActive = missingPlans.map((p) => ({ ...p, is_active: true }));
     const { error: insertErr } = await supabase.from('subscription_plans').insert(withActive);
 
-    // Retry without is_active if the table schema omits that column
     if (insertErr && /is_active/i.test(insertErr.message || '')) {
       const { error: fallbackErr } = await supabase
         .from('subscription_plans')

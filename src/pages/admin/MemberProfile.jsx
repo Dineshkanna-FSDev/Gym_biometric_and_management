@@ -17,22 +17,17 @@ import {
   ShieldAlert,
   User,
 } from 'lucide-react';
-import { isSupabaseConfigured, supabase } from '../../lib/supabase';
+import { supabase } from '../../lib/supabase';
 import { ensureAndFetchSubscriptionPlans } from '../../lib/subscriptionPlans';
-import { useAuth } from '../../hooks/useAuth';
-import {
-  DEMO_ATTENDANCE_LOGS,
-  DEMO_MEMBERS_OVERVIEW,
-  DEMO_PAYMENTS,
-  DEMO_SUBSCRIPTIONS,
-} from '../../data/demoData';
 import StatusBadge from '../../components/ui/StatusBadge';
 import StreakBadge from '../../components/ui/StreakBadge';
 import Modal from '../../components/ui/Modal';
 import RenewBillingModal from '../../components/billing/RenewBillingModal';
 import MemberWorkoutAnalytics from '../../components/analytics/MemberWorkoutAnalytics';
+import { KpiGridSkeleton } from '../../components/ui/LoadingSkeletons';
 import {
   displayValue,
+  emptyToNull,
   formatCurrency,
   formatDate,
   formatDateTime,
@@ -67,13 +62,12 @@ function sortByNewest(rows, keys) {
 }
 
 /**
- * Full member profile view (/admin/members/:id) backed by `member_overview`,
- * `attendance_logs`, `member_subscriptions`, and `payments`.
+ * Full member profile view (/admin/members/:id) backed strictly by Supabase
+ * (`member_overview`, `attendance_logs`, `member_subscriptions`, `payments`).
  */
 export default function MemberProfile() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { isDemoMode } = useAuth();
 
   const [member, setMember] = useState(null);
   const [plansById, setPlansById] = useState({});
@@ -102,27 +96,6 @@ export default function MemberProfile() {
   });
 
   const fetchProfileData = useCallback(async () => {
-    if (isDemoMode || !isSupabaseConfigured || !supabase) {
-      const found = DEMO_MEMBERS_OVERVIEW.find((m) => String(m.id) === String(id)) || null;
-      const loadedPlans = await ensureAndFetchSubscriptionPlans(true);
-      return {
-        member: found,
-        plansById: Object.fromEntries(loadedPlans.map((p) => [String(p.id), p])),
-        attendanceLogs: sortByNewest(
-          DEMO_ATTENDANCE_LOGS.filter((a) => String(a.member_id) === String(id)),
-          ['check_in_at', 'attendance_date']
-        ),
-        subscriptions: sortByNewest(
-          DEMO_SUBSCRIPTIONS.filter((s) => String(s.member_id) === String(id)),
-          ['start_date', 'created_at']
-        ),
-        payments: sortByNewest(
-          DEMO_PAYMENTS.filter((p) => String(p.member_id) === String(id)),
-          ['payment_date', 'created_at']
-        ),
-      };
-    }
-
     const [overviewRes, attRes, subRes, payRes, plansList] = await Promise.all([
       supabase.from('member_overview').select('*').eq('id', id).maybeSingle(),
       supabase
@@ -133,7 +106,7 @@ export default function MemberProfile() {
         .limit(500),
       supabase.from('member_subscriptions').select('*').eq('member_id', id).limit(50),
       supabase.from('payments').select('*').eq('member_id', id).limit(100),
-      ensureAndFetchSubscriptionPlans(false).catch(() => []),
+      ensureAndFetchSubscriptionPlans().catch(() => []),
     ]);
 
     if (overviewRes.error) {
@@ -149,9 +122,9 @@ export default function MemberProfile() {
         : sortByNewest(subRes.data || [], ['start_date', 'created_at']),
       payments: payRes.error
         ? []
-        : sortByNewest(payRes.data || [], ['payment_date', 'paid_at', 'created_at']),
+        : sortByNewest(payRes.data || [], ['paid_at', 'payment_date', 'created_at']),
     };
-  }, [id, isDemoMode]);
+  }, [id]);
 
   const loadProfile = useCallback(async () => {
     setLoading(true);
@@ -200,11 +173,11 @@ export default function MemberProfile() {
       full_name: member.full_name || '',
       phone: member.phone || '',
       email: member.email || '',
-      gender: member.gender || '',
+      gender: member.gender ? String(member.gender).toLowerCase() : '',
       date_of_birth: member.date_of_birth ? String(member.date_of_birth).slice(0, 10) : '',
       district: member.district || '',
       emergency_contact: member.emergency_contact || '',
-      status: member.status || 'active',
+      status: member.status ? String(member.status).toLowerCase() : 'active',
     });
     setEditOpen(true);
   }
@@ -215,25 +188,18 @@ export default function MemberProfile() {
     setActionMessage({ type: '', text: '' });
 
     try {
+      const genderVal = emptyToNull(editForm.gender);
+      const statusVal = emptyToNull(editForm.status);
       const payload = {
         full_name: editForm.full_name.trim(),
-        phone: editForm.phone.trim() || null,
-        email: editForm.email.trim() || null,
-        gender: editForm.gender.trim() || null,
-        date_of_birth: editForm.date_of_birth || null,
-        district: editForm.district.trim() || null,
-        emergency_contact: editForm.emergency_contact.trim() || null,
-        status: editForm.status,
+        phone: emptyToNull(editForm.phone),
+        email: emptyToNull(editForm.email),
+        gender: genderVal ? genderVal.toLowerCase() : null,
+        date_of_birth: emptyToNull(editForm.date_of_birth),
+        district: emptyToNull(editForm.district),
+        emergency_contact: emptyToNull(editForm.emergency_contact),
+        status: statusVal ? statusVal.toLowerCase() : 'active',
       };
-
-      if (isDemoMode || !isSupabaseConfigured || !supabase) {
-        setMember((prev) =>
-          prev ? { ...prev, ...payload, updated_at: new Date().toISOString() } : prev
-        );
-        setEditOpen(false);
-        setActionMessage({ type: 'success', text: 'Member profile updated (Demo Mode).' });
-        return;
-      }
 
       const { error: updateError } = await supabase.from('members').update(payload).eq('id', id);
       if (updateError) throw updateError;
@@ -249,83 +215,6 @@ export default function MemberProfile() {
   }
 
   async function handleBillingSuccess(result) {
-    if (isDemoMode || !isSupabaseConfigured || !supabase) {
-      if (result.type === 'clear_balance') {
-        const newPay = {
-          id: `pay-${crypto.randomUUID().slice(0, 6)}`,
-          member_id: id,
-          subscription_id: result.subscriptionId,
-          amount: result.amountPaid,
-          payment_method: result.paymentMethod,
-          payment_date: result.paymentDate,
-          status: 'paid',
-          notes: result.notes || 'Pending balance cleared',
-        };
-        setPayments((prev) => [newPay, ...prev]);
-        setMember((prev) => {
-          if (!prev) return prev;
-          const nextPaid = Number(result.nextPaidTotal ?? prev.paid_amount ?? 0);
-          const nextPending = Math.max(0, Number(prev.amount || 0) - nextPaid);
-          return { ...prev, paid_amount: nextPaid, pending_amount: nextPending };
-        });
-        setActionMessage({
-          type: 'success',
-          text: `Balance payment of ${formatCurrency(result.amountPaid)} recorded.`,
-        });
-        return;
-      }
-
-      const newSubId = `sub-${crypto.randomUUID().slice(0, 6)}`;
-      const newSub = {
-        id: newSubId,
-        member_id: id,
-        plan_id: result.plan?.id,
-        package_name: result.plan?.name,
-        start_date: result.startDate,
-        end_date: result.endDate,
-        payable_amount: result.payableAmount,
-        paid_amount: result.paidAmount,
-        status: 'active',
-      };
-      setSubscriptions((prev) => [newSub, ...prev]);
-
-      if (result.paidAmount > 0) {
-        const newPay = {
-          id: `pay-${crypto.randomUUID().slice(0, 6)}`,
-          member_id: id,
-          subscription_id: newSubId,
-          amount: result.paidAmount,
-          payment_method: result.paymentMethod,
-          payment_date: result.paymentDate,
-          status: result.pendingAmount > 0 ? 'partial' : 'paid',
-          notes: result.notes || `${result.plan?.name} renewal`,
-        };
-        setPayments((prev) => [newPay, ...prev]);
-      }
-
-      setMember((prev) =>
-        prev
-          ? {
-              ...prev,
-              status: 'active',
-              subscription_id: newSubId,
-              active_package: result.plan?.name || prev.active_package,
-              start_date: result.startDate,
-              next_renewal: result.endDate,
-              validity_days: Number(result.plan?.duration_days || 30),
-              amount: result.payableAmount,
-              paid_amount: result.paidAmount,
-              pending_amount: result.pendingAmount,
-            }
-          : prev
-      );
-      setActionMessage({
-        type: 'success',
-        text: `Package renewed (${result.plan?.name}) successfully.`,
-      });
-      return;
-    }
-
     await loadProfile();
     setActionMessage({
       type: 'success',
@@ -338,9 +227,10 @@ export default function MemberProfile() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[55vh] flex-col items-center justify-center gap-3 text-slate-500">
-        <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
-        <p className="text-sm font-medium">Loading member profile...</p>
+      <div className="space-y-6">
+        <div className="h-32 animate-pulse rounded-2xl border border-slate-200 bg-white p-6" />
+        <KpiGridSkeleton count={4} colsClass="grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" />
+        <div className="h-56 animate-pulse rounded-2xl border border-slate-200 bg-white p-6" />
       </div>
     );
   }
@@ -491,7 +381,7 @@ export default function MemberProfile() {
             </div>
           </div>
 
-          {/* Quick Actions: Edit Member + Unified Renew / Billing */}
+          {/* Quick Actions */}
           <div className="flex flex-wrap items-center gap-2.5">
             <button
               type="button"
@@ -814,11 +704,11 @@ export default function MemberProfile() {
                         <p className="text-sm font-bold text-slate-900">
                           {formatCurrency(pay.amount)}
                           <span className="ml-2 rounded bg-white px-1.5 py-0.5 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
-                            {displayValue(pay.payment_method || pay.method, 'Payment')}
+                            {displayValue(pay.payment_mode || pay.payment_method || pay.method, 'Payment')}
                           </span>
                         </p>
                         <p className="mt-0.5 truncate text-xs text-slate-500">
-                          {formatDate(pay.payment_date || pay.paid_at || pay.created_at)}
+                          {formatDate(pay.paid_at || pay.payment_date || pay.created_at)}
                           {pay.notes ? ` • ${pay.notes}` : ''}
                         </p>
                       </div>
@@ -888,9 +778,9 @@ export default function MemberProfile() {
                 className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
               >
                 <option value="">Select</option>
-                <option value="Male">Male</option>
-                <option value="Female">Female</option>
-                <option value="Other">Other</option>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+                <option value="other">Other</option>
               </select>
             </div>
             <div>
@@ -921,6 +811,7 @@ export default function MemberProfile() {
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
                 <option value="expired">Expired</option>
+                <option value="pending_biometric">Pending Biometric</option>
               </select>
             </div>
             <div className="sm:col-span-2">

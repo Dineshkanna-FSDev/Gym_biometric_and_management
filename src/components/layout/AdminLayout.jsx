@@ -23,22 +23,23 @@ const ADMIN_NAV_ITEMS = [
 ];
 
 /**
- * Light-themed SaaS Admin Shell with top global search header,
- * icon-above-label vertical sidebar, mobile drawer, and logout action.
+ * Light-themed SaaS Admin Shell with live global member search header,
+ * authenticated admin profile pill, icon-above-label sidebar, and logout.
  */
 export default function AdminLayout() {
-  const { user, isDemoMode, signOut } = useAuth();
+  const { user, adminProfile, signOut } = useAuth();
   const navigate = useNavigate();
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
 
-  const displayName = user?.user_metadata?.full_name || 'Admin';
+  const displayName =
+    adminProfile?.full_name || user?.user_metadata?.full_name || user?.email || 'Admin';
 
   async function handleLogout() {
     await signOut();
-    navigate('/login', { replace: true });
+    navigate('/', { replace: true });
   }
 
   function handleToggleSidebar() {
@@ -105,19 +106,14 @@ export default function AdminLayout() {
         {/* Center: Global Member Search & Quick Jump */}
         <GlobalMemberSearch value={globalSearch} onChange={setGlobalSearch} />
 
-        {/* Right: Admin Greeting */}
+        {/* Right: Authenticated Admin Profile Pill */}
         <div className="flex items-center gap-2.5">
-          {isDemoMode && (
-            <span className="hidden rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200 lg:inline-flex">
-              Demo Bypass
-            </span>
-          )}
-          <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 py-1.5 pl-3 pr-3.5">
+          <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 py-1.5 pl-2.5 pr-3.5">
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">
               {displayName.charAt(0).toUpperCase()}
             </span>
-            <span className="text-sm font-semibold text-slate-700 whitespace-nowrap">
-              Hi, {displayName}
+            <span className="max-w-[140px] truncate text-sm font-semibold text-slate-700">
+              {displayName}
             </span>
           </div>
         </div>

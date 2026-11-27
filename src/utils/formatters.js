@@ -2,6 +2,12 @@
  * Shared formatting and status-mapping helpers for admin views.
  */
 
+export function emptyToNull(value) {
+  if (value === null || value === undefined) return null;
+  const trimmed = String(value).trim();
+  return trimmed === '' ? null : trimmed;
+}
+
 export function displayValue(value, fallback = '—') {
   if (value === null || value === undefined || value === '') return fallback;
   return value;
@@ -77,6 +83,7 @@ export function getMemberStatusVariant(status) {
     normalized === 'expiring' ||
     normalized === 'expiring_soon' ||
     normalized === 'pending' ||
+    normalized === 'pending_biometric' ||
     normalized === 'auto_closed'
   ) {
     return 'warning';

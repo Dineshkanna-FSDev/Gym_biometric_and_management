@@ -4,19 +4,17 @@ import {
   AlertCircle,
   CheckCircle2,
   CreditCard,
-  Loader2,
   RefreshCw,
   ScanFace,
   Search,
   UserPlus,
 } from 'lucide-react';
-import { isSupabaseConfigured, supabase } from '../../lib/supabase';
-import { useAuth } from '../../hooks/useAuth';
-import { DEMO_MEMBERS_OVERVIEW } from '../../data/demoData';
+import { supabase } from '../../lib/supabase';
 import StatusBadge from '../../components/ui/StatusBadge';
 import MemberLink from '../../components/ui/MemberLink';
 import AddMemberModal from '../../components/members/AddMemberModal';
 import RenewBillingModal from '../../components/billing/RenewBillingModal';
+import { TableRowsSkeleton } from '../../components/ui/LoadingSkeletons';
 import {
   displayValue,
   formatCurrency,
@@ -33,11 +31,9 @@ const STATUS_FILTERS = [
 ];
 
 /**
- * Members Directory page (/admin/members) backed by `member_overview`.
- * Includes unified Add Member onboarding and unified Renew / Billing actions.
+ * Members Directory page (/admin/members) backed strictly by `public.member_overview`.
  */
 export default function Members() {
-  const { isDemoMode } = useAuth();
   const outletContext = useOutletContext() || {};
   const globalSearch = (outletContext.globalSearch || '').trim();
 
@@ -49,13 +45,9 @@ export default function Members() {
 
   const [addOpen, setAddOpen] = useState(false);
   const [billingMember, setBillingMember] = useState(null);
-  const [banner, setBanner] = useState(null); // { memberId, text }
+  const [banner, setBanner] = useState(null);
 
   const fetchMembersData = useCallback(async () => {
-    if (isDemoMode || !isSupabaseConfigured || !supabase) {
-      return DEMO_MEMBERS_OVERVIEW;
-    }
-
     const { data, error: fetchError } = await supabase
       .from('member_overview')
       .select('*')
@@ -63,7 +55,7 @@ export default function Members() {
 
     if (fetchError) throw fetchError;
     return data || [];
-  }, [isDemoMode]);
+  }, []);
 
   const loadMembers = useCallback(async () => {
     setLoading(true);
@@ -98,18 +90,6 @@ export default function Members() {
   }, [fetchMembersData]);
 
   async function handleOnboardingSuccess(result) {
-    if (isDemoMode || !isSupabaseConfigured || !supabase) {
-      if (result.demoRecord) {
-        setMembers((prev) => [result.demoRecord, ...prev]);
-      }
-      setBanner({
-        memberId: result.memberId,
-        memberName: result.fullName,
-        text: `Member onboarded (PIN #${result.devicePin ?? '—'}) with active package.`,
-      });
-      return;
-    }
-
     await loadMembers();
     setBanner({
       memberId: result.memberId,
@@ -119,38 +99,6 @@ export default function Members() {
   }
 
   async function handleBillingSuccess(result) {
-    if (isDemoMode || !isSupabaseConfigured || !supabase) {
-      setMembers((prev) =>
-        prev.map((m) => {
-          if (String(m.id) !== String(result.memberId)) return m;
-          if (result.type === 'clear_balance') {
-            const nextPaid = Number(result.nextPaidTotal ?? m.paid_amount ?? 0);
-            const nextPending = Math.max(0, Number(m.amount || 0) - nextPaid);
-            return { ...m, paid_amount: nextPaid, pending_amount: nextPending };
-          }
-          return {
-            ...m,
-            status: 'active',
-            active_package: result.plan?.name || m.active_package,
-            start_date: result.startDate,
-            next_renewal: result.endDate,
-            validity_days: Number(result.plan?.duration_days || 30),
-            amount: result.payableAmount,
-            paid_amount: result.paidAmount,
-            pending_amount: result.pendingAmount,
-          };
-        })
-      );
-      setBanner({
-        memberId: result.memberId,
-        text:
-          result.type === 'clear_balance'
-            ? `Recorded balance payment of ${formatCurrency(result.amountPaid)}.`
-            : `Renewed package (${result.plan?.name}) successfully.`,
-      });
-      return;
-    }
-
     await loadMembers();
     setBanner({
       memberId: result.memberId,
@@ -168,13 +116,13 @@ export default function Members() {
       if (String(m.status || '').toLowerCase() !== 'active') return false;
     } else if (statusFilter === 'expiring') {
       const days = Number(m.validity_days);
-      if (m.validity_days === null || m.validity_days === undefined || days <= 0 || days > 10) {
+      if (m.validity_days === null || m.validity_days === undefined || days < 0 || days > 5) {
         return false;
       }
     } else if (statusFilter === 'expired') {
       const isExpired =
         String(m.status || '').toLowerCase() === 'expired' ||
-        (m.validity_days !== null && m.validity_days !== undefined && Number(m.validity_days) <= 0);
+        (m.validity_days !== null && m.validity_days !== undefined && Number(m.validity_days) < 0);
       if (!isExpired) return false;
     }
 
@@ -299,16 +247,13 @@ export default function Members() {
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
               {loading && members.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-5 py-12 text-center text-sm text-slate-500">
-                    <Loader2 className="mx-auto mb-2 h-6 w-6 animate-spin text-indigo-600" />
-                    Loading members...
-                  </td>
-                </tr>
+                <TableRowsSkeleton rows={6} cols={8} />
               ) : filteredMembers.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-5 py-12 text-center text-sm text-slate-400">
-                    No members match the selected filter.
+                    {members.length === 0
+                      ? 'No members registered yet.'
+                      : 'No members match the selected filter.'}
                   </td>
                 </tr>
               ) : (

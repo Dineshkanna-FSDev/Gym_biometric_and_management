@@ -1,18 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, Search, User } from 'lucide-react';
-import { isSupabaseConfigured, supabase } from '../../lib/supabase';
-import { useAuth } from '../../hooks/useAuth';
-import { DEMO_MEMBERS_OVERVIEW } from '../../data/demoData';
+import { supabase } from '../../lib/supabase';
 import StatusBadge from '../ui/StatusBadge';
 import { displayValue, getMemberStatusVariant } from '../../utils/formatters';
 
 /**
- * Debounced header search bar that queries `member_overview` by full_name,
+ * Debounced header search bar that queries `public.member_overview` by full_name,
  * phone, or device_pin and lets admins jump directly to /admin/members/:id.
  */
 export default function GlobalMemberSearch({ value, onChange }) {
-  const { isDemoMode } = useAuth();
   const navigate = useNavigate();
 
   const containerRef = useRef(null);
@@ -22,7 +19,6 @@ export default function GlobalMemberSearch({ value, onChange }) {
   const [searchError, setSearchError] = useState('');
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
-  // Close dropdown on outside click
   useEffect(() => {
     function handleOutsideClick(e) {
       if (containerRef.current && !containerRef.current.contains(e.target)) {
@@ -33,7 +29,6 @@ export default function GlobalMemberSearch({ value, onChange }) {
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  // Debounced member_overview search
   useEffect(() => {
     const trimmed = value.trim();
     if (!trimmed) {
@@ -46,24 +41,6 @@ export default function GlobalMemberSearch({ value, onChange }) {
       setSearchError('');
 
       try {
-        if (isDemoMode || !isSupabaseConfigured || !supabase) {
-          const needle = trimmed.toLowerCase();
-          const pinNeedle = needle.replace(/^(sn|#)/i, '');
-          const matched = DEMO_MEMBERS_OVERVIEW.filter((m) => {
-            const nameMatch = (m.full_name || '').toLowerCase().includes(needle);
-            const phoneMatch = (m.phone || '').toLowerCase().includes(needle);
-            const pinMatch = String(m.device_pin ?? '').includes(pinNeedle);
-            return nameMatch || phoneMatch || pinMatch;
-          }).slice(0, 8);
-
-          if (!cancelled) {
-            setResults(matched);
-            setHighlightedIndex(matched.length > 0 ? 0 : -1);
-            setIsOpen(true);
-          }
-          return;
-        }
-
         const safeQuery = trimmed.replace(/[(),]/g, ' ').trim();
         const numericCandidate = safeQuery.replace(/^(sn|#)/i, '');
         const orFilters = [
@@ -110,7 +87,7 @@ export default function GlobalMemberSearch({ value, onChange }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [value, isDemoMode]);
+  }, [value]);
 
   function handleInputChange(nextValue) {
     onChange(nextValue);

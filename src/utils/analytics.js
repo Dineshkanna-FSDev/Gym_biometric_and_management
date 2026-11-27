@@ -213,7 +213,7 @@ export function buildRevenueAnalytics({
     }
     packageStats.get(pkgName).revenue += amt;
 
-    const rawMethod = String(pay.payment_method || pay.method || 'Other').trim();
+    const rawMethod = String(pay.payment_mode || pay.payment_method || pay.method || 'Other').trim();
     const matchedMethod = Array.from(methodTotals.keys()).find(
       (k) => k.toLowerCase() === rawMethod.toLowerCase()
     );

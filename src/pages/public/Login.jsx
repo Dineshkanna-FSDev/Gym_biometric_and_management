@@ -9,16 +9,14 @@ import {
   Loader2,
   Lock,
   Mail,
-  Sparkles,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 
 /**
- * Administrator login screen backed by Supabase Auth with a temporary
- * dev-bypass demo trigger for immediate route & UI testing.
+ * Administrator login screen backed by Supabase Auth and `public.admin_users`.
  */
 export default function Login() {
-  const { isAuthenticated, isSupabaseConfigured, signIn, signInDemo } = useAuth();
+  const { isAuthenticated, authError, signIn } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -55,11 +53,7 @@ export default function Login() {
     navigate(redirectTo, { replace: true });
   }
 
-  function handleDemoBypass() {
-    setErrorMessage('');
-    signInDemo();
-    navigate(redirectTo, { replace: true });
-  }
+  const displayedError = errorMessage || authError;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center px-4 py-12 sm:px-6 lg:px-8">
@@ -84,18 +78,18 @@ export default function Login() {
               Fit &amp; Impact Admin
             </h1>
             <p className="mt-1 text-sm text-slate-500">
-              Sign in to manage members, subscriptions &amp; ZKFace logs
+              Sign in with your authorized administrator account
             </p>
           </div>
 
           {/* Error Alert Banner */}
-          {errorMessage && (
+          {displayedError && (
             <div
               role="alert"
               className="mt-6 flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-sm text-rose-700"
             >
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
-              <span>{errorMessage}</span>
+              <span>{displayedError}</span>
             </div>
           )}
 
@@ -160,26 +154,6 @@ export default function Login() {
               )}
             </button>
           </form>
-
-          {/* Temporary Dev-Bypass Demo Access */}
-          <div className="mt-6 rounded-xl border border-dashed border-amber-300 bg-amber-50/70 p-4">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-800">
-              <Sparkles className="h-3.5 w-3.5 text-amber-600" />
-              <span>Dev Preview Mode</span>
-            </div>
-            <p className="mt-1 text-xs text-amber-700">
-              {isSupabaseConfigured
-                ? 'Bypass Supabase login temporarily to preview admin routes and placeholder widgets.'
-                : 'Supabase credentials are not configured yet. Use demo mode to explore the admin dashboard.'}
-            </p>
-            <button
-              type="button"
-              onClick={handleDemoBypass}
-              className="mt-3 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-900 shadow-2xs transition hover:bg-amber-100"
-            >
-              Continue with Demo Admin Session
-            </button>
-          </div>
         </div>
       </div>
     </div>

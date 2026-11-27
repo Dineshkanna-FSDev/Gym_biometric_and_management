@@ -1,154 +1,190 @@
 import { useEffect, useState } from 'react';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 import { AuthContext } from '../hooks/useAuth';
 
-const DEMO_STORAGE_KEY = 'fitimpact_demo_auth';
+/**
+ * Verifies that the authenticated Supabase user exists in `public.admin_users`.
+ */
+async function fetchAdminRecord(userId) {
+  const { data, error } = await supabase
+    .from('admin_users')
+    .select('id, full_name')
+    .eq('id', userId)
+    .maybeSingle();
 
-const DEMO_USER = {
-  id: 'demo-admin-001',
-  email: 'admin@fitandimpact.com',
-  user_metadata: {
-    full_name: 'Admin',
-    role: 'admin',
-  },
-};
+  if (error) {
+    throw error;
+  }
+  return data;
+}
 
 /**
- * Provides Supabase session state, auth listeners, and a temporary dev-bypass
- * demo login toggle so protected routes can be tested prior to DB setup.
+ * Provides live Supabase Authentication state, enforces `public.admin_users`
+ * authorization on every session, and handles signIn / signOut.
  */
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [user, setUser] = useState(null);
-  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [adminProfile, setAdminProfile] = useState(null);
+  const [authError, setAuthError] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let isMounted = true;
-    let subscription = null;
 
-    async function initAuth() {
-      // Allow immediate route testing when dev-bypass demo mode was activated
-      const savedDemo = localStorage.getItem(DEMO_STORAGE_KEY) === 'true';
-      if (savedDemo) {
-        if (isMounted) {
-          setUser(DEMO_USER);
-          setSession({ user: DEMO_USER, access_token: 'demo-token' });
-          setIsDemoMode(true);
-          setLoading(false);
-        }
-        return;
-      }
-
-      if (!isSupabaseConfigured || !supabase) {
-        if (isMounted) {
-          setLoading(false);
-        }
+    async function validateSession(nextSession) {
+      if (!nextSession?.user?.id) {
+        if (!isMounted) return;
+        setSession(null);
+        setUser(null);
+        setAdminProfile(null);
+        setLoading(false);
         return;
       }
 
       try {
-        const { data, error } = await supabase.auth.getSession();
-        if (!error && isMounted) {
-          setSession(data.session ?? null);
-          setUser(data.session?.user ?? null);
+        const adminRow = await fetchAdminRecord(nextSession.user.id);
+        if (!isMounted) return;
+
+        if (!adminRow) {
+          await supabase.auth.signOut();
+          if (!isMounted) return;
+          setSession(null);
+          setUser(null);
+          setAdminProfile(null);
+          setAuthError('Access denied. Your account is not authorized as an admin.');
+          return;
         }
+
+        setAuthError('');
+        setSession(nextSession);
+        setUser(nextSession.user);
+        setAdminProfile(adminRow);
       } catch (err) {
-        console.error('Failed to restore Supabase auth session:', err);
+        if (!isMounted) return;
+        console.error('Admin verification failed:', err);
+        await supabase.auth.signOut();
+        if (!isMounted) return;
+        setSession(null);
+        setUser(null);
+        setAdminProfile(null);
+        setAuthError(err.message || 'Unable to verify administrator permissions.');
       } finally {
         if (isMounted) {
           setLoading(false);
         }
       }
-
-      const { data: listenerData } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-        if (!isMounted) return;
-        setSession(nextSession ?? null);
-        setUser(nextSession?.user ?? null);
-        setIsDemoMode(false);
-        setLoading(false);
-      });
-
-      subscription = listenerData?.subscription ?? null;
     }
 
-    initAuth();
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('Failed to restore Supabase auth session:', error);
+          if (isMounted) setLoading(false);
+          return;
+        }
+        validateSession(data?.session ?? null);
+      })
+      .catch((err) => {
+        console.error('Auth initialization error:', err);
+        if (isMounted) setLoading(false);
+      });
+
+    const { data: listenerData } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      // Defer DB verification outside the GoTrue auth lock callback
+      setTimeout(() => {
+        if (isMounted) {
+          validateSession(nextSession ?? null);
+        }
+      }, 0);
+    });
 
     return () => {
       isMounted = false;
-      if (subscription) {
-        subscription.unsubscribe();
-      }
+      listenerData?.subscription?.unsubscribe();
     };
   }, []);
 
   /**
-   * Signs in an administrator using Supabase email & password auth.
+   * Signs in with Supabase email/password and verifies `public.admin_users` membership.
    */
   async function signIn(email, password) {
-    if (!isSupabaseConfigured || !supabase) {
-      return {
-        data: null,
-        error: new Error(
-          'Supabase credentials are not configured. Use Dev Demo Login below or update your .env file.'
-        ),
-      };
-    }
-
-    localStorage.removeItem(DEMO_STORAGE_KEY);
-    setIsDemoMode(false);
+    setAuthError('');
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
 
-    if (!error && data?.session) {
-      setSession(data.session);
-      setUser(data.session.user);
+    if (error) {
+      return { data: null, error };
     }
 
-    return { data, error };
+    const authUser = data?.session?.user;
+    if (!authUser?.id) {
+      return {
+        data: null,
+        error: new Error('Authentication succeeded without a valid user session.'),
+      };
+    }
+
+    try {
+      const adminRow = await fetchAdminRecord(authUser.id);
+      if (!adminRow) {
+        await supabase.auth.signOut();
+        setSession(null);
+        setUser(null);
+        setAdminProfile(null);
+        const unauthorizedError = new Error(
+          'Access denied. This account is not listed in admin_users.'
+        );
+        setAuthError(unauthorizedError.message);
+        return { data: null, error: unauthorizedError };
+      }
+
+      setSession(data.session);
+      setUser(authUser);
+      setAdminProfile(adminRow);
+      return { data, error: null };
+    } catch (verifyErr) {
+      await supabase.auth.signOut();
+      setSession(null);
+      setUser(null);
+      setAdminProfile(null);
+      const errObj =
+        verifyErr instanceof Error
+          ? verifyErr
+          : new Error('Unable to verify administrator access.');
+      setAuthError(errObj.message);
+      return { data: null, error: errObj };
+    }
   }
 
   /**
-   * Activates a temporary dev-bypass session for UI and routing verification.
-   */
-  function signInDemo() {
-    localStorage.setItem(DEMO_STORAGE_KEY, 'true');
-    setIsDemoMode(true);
-    setUser(DEMO_USER);
-    setSession({ user: DEMO_USER, access_token: 'demo-token' });
-    setLoading(false);
-  }
-
-  /**
-   * Clears both demo session state and any active Supabase session.
+   * Signs out from Supabase Auth and clears local auth/admin profile state.
    */
   async function signOut() {
-    localStorage.removeItem(DEMO_STORAGE_KEY);
-    setIsDemoMode(false);
+    setAuthError('');
     setSession(null);
     setUser(null);
+    setAdminProfile(null);
 
-    if (isSupabaseConfigured && supabase) {
-      try {
-        await supabase.auth.signOut();
-      } catch (err) {
-        console.error('Supabase signOut failed:', err);
-      }
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error('Supabase signOut failed:', err);
     }
   }
 
   const value = {
     session,
     user,
-    isAuthenticated: Boolean(user),
-    isDemoMode,
-    isSupabaseConfigured,
+    adminProfile,
+    authError,
+    isAuthenticated: Boolean(user && adminProfile),
     loading,
     signIn,
-    signInDemo,
     signOut,
   };
 
