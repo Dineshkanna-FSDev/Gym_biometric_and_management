@@ -8,10 +8,15 @@ import { formatDurationMinutes } from '../../utils/formatters';
  * Per-member workout analytics section rendered inside /admin/members/:id.
  * Computes 4 workout KPIs, a 30-day duration bar chart, and Mon-Sun habit breakdown.
  */
-export default function MemberWorkoutAnalytics({ logs = [], joiningDate }) {
+export default function MemberWorkoutAnalytics({
+  logs = [],
+  joiningDate,
+  currentStreak = 0,
+}) {
   const [hoveredDay, setHoveredDay] = useState(null);
 
   const analytics = computeMemberWorkoutAnalytics(logs, joiningDate);
+  const streakCount = Math.max(0, Number(currentStreak || 0));
   const maxMinutes = Math.max(
     60,
     ...analytics.thirtyDaySeries.map((d) => d.minutes)
@@ -34,8 +39,29 @@ export default function MemberWorkoutAnalytics({ logs = [], joiningDate }) {
         </span>
       </div>
 
-      {/* 4 Member Analytics KPIs */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      {/* Member Analytics KPIs */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <StatCard
+          label="Current Streak"
+          value={`${streakCount} ${streakCount === 1 ? 'day' : 'days'}`}
+          subtext="Consecutive gym days (skips holidays)"
+          icon={Flame}
+          accentClass={
+            streakCount >= 7
+              ? 'bg-gradient-to-br from-orange-500 to-red-500 text-white'
+              : streakCount >= 1
+                ? 'bg-amber-50 text-orange-600'
+                : 'bg-slate-100 text-slate-400'
+          }
+          valueClass={
+            streakCount >= 7
+              ? 'text-orange-600'
+              : streakCount >= 1
+                ? 'text-amber-700'
+                : 'text-slate-600'
+          }
+        />
+
         <StatCard
           label="Avg. Hours / Day"
           value={analytics.avgHoursLabel}

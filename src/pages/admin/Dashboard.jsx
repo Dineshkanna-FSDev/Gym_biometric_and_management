@@ -20,6 +20,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { DEMO_ATTENDANCE_LOGS, DEMO_MEMBERS_OVERVIEW } from '../../data/demoData';
 import StatCard from '../../components/ui/StatCard';
 import StatusBadge from '../../components/ui/StatusBadge';
+import StreakBadge from '../../components/ui/StreakBadge';
 import MemberLink from '../../components/ui/MemberLink';
 import {
   displayValue,
@@ -289,6 +290,7 @@ export default function Dashboard() {
         memberId: log.member_id,
         name: m?.full_name || `Member #${log.member_id}`,
         pin: m?.device_pin,
+        currentStreak: Number(m?.current_streak || 0),
         checkIn: formatTime(log.check_in_at),
         checkOut: formatTime(log.check_out_at),
         validityDays: m?.validity_days ?? null,
@@ -450,8 +452,9 @@ export default function Dashboard() {
                       attendanceRows.map((row) => (
                         <tr key={row.id} className="transition hover:bg-slate-50/70">
                           <td className="px-5 py-3.5 whitespace-nowrap">
-                            <div>
+                            <div className="flex items-center gap-2">
                               <MemberLink memberId={row.memberId} name={row.name} />
+                              <StreakBadge count={row.currentStreak} />
                             </div>
                             <div className="font-mono text-xs text-slate-400">
                               PIN {displayValue(row.pin)}

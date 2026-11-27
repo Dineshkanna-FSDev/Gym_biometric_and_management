@@ -27,6 +27,7 @@ import {
   DEMO_SUBSCRIPTIONS,
 } from '../../data/demoData';
 import StatusBadge from '../../components/ui/StatusBadge';
+import StreakBadge from '../../components/ui/StreakBadge';
 import Modal from '../../components/ui/Modal';
 import RenewBillingModal from '../../components/billing/RenewBillingModal';
 import MemberWorkoutAnalytics from '../../components/analytics/MemberWorkoutAnalytics';
@@ -458,6 +459,7 @@ export default function MemberProfile() {
                   >
                     {displayValue(member.status, 'unknown')}
                   </StatusBadge>
+                  <StreakBadge count={member.current_streak} showZero size="md" />
                 </div>
 
                 <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs">
@@ -649,7 +651,11 @@ export default function MemberProfile() {
       </section>
 
       {/* Member Workout Analytics */}
-      <MemberWorkoutAnalytics logs={attendanceLogs} joiningDate={member.joining_date} />
+      <MemberWorkoutAnalytics
+        logs={attendanceLogs}
+        joiningDate={member.joining_date}
+        currentStreak={member.current_streak}
+      />
 
       {/* History Tabs */}
       <section className="rounded-2xl border border-slate-200 bg-white shadow-xs">
