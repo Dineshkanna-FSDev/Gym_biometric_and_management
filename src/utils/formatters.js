@@ -70,8 +70,15 @@ export function formatDurationMinutes(minutes) {
 
 export function getMemberStatusVariant(status) {
   const normalized = String(status || '').toLowerCase();
-  if (normalized === 'active' || normalized === 'present') return 'success';
-  if (normalized === 'expiring' || normalized === 'expiring_soon' || normalized === 'pending') {
+  if (normalized === 'active' || normalized === 'present' || normalized === 'completed') {
+    return 'success';
+  }
+  if (
+    normalized === 'expiring' ||
+    normalized === 'expiring_soon' ||
+    normalized === 'pending' ||
+    normalized === 'auto_closed'
+  ) {
     return 'warning';
   }
   if (normalized === 'expired' || normalized === 'overdue' || normalized === 'failed') {
